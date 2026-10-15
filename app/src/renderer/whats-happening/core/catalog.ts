@@ -29,6 +29,20 @@ const DESCRIBERS: Record<string, Describer> = {
   run_tool: (args) => `Running ${galaxyToolLabel(args.tool_id)}`,
 };
 
+/**
+ * Galaxy MCP tools whose success means Galaxy keeps working after the call
+ * returns, and whose finish the harness reports. Uploads also run as Galaxy
+ * jobs, but Orbit's poller never reports them finished, so counting them here
+ * left "Galaxy is still working" on screen forever; they come back once job
+ * state is read directly.
+ */
+const STARTS_GALAXY_WORK = new Set(["run_tool", "run_user_tool", "invoke_workflow"]);
+
+/** Whether a successful call to this tool leaves a job running in Galaxy. */
+export function startsGalaxyWork(toolName: string): boolean {
+  return STARTS_GALAXY_WORK.has(normalizeToolName(toolName).name);
+}
+
 /** Title for a tool call, from its harness name and arguments. */
 export function describeToolCall(toolName: string, args: unknown): string {
   const { name, galaxy } = normalizeToolName(toolName);

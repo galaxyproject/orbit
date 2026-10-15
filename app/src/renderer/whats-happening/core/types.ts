@@ -54,3 +54,64 @@ export interface NarrationEntry {
   startedAt: number;
   endedAt?: number;
 }
+
+/**
+ * Lifecycle events: everything the harness reports besides tool calls. A
+ * group is all the work done for one message, from `group-start` to
+ * `group-end`.
+ */
+export type LifecycleEvent =
+  | { kind: "group-start"; at: number }
+  | {
+      kind: "group-info";
+      at: number;
+      /** The message that started the group, as the user typed it. */
+      text: string;
+      /** True when the harness started the group itself (e.g. to follow up on a Galaxy job). */
+      followUp: boolean;
+    }
+  | { kind: "model"; at: number; activity: "thinking" | "writing" | "tool-call" }
+  | { kind: "group-end"; at: number; error?: string }
+  | {
+      kind: "galaxy-finished";
+      at: number;
+      /** What the harness called the finished work, when it said; matched loosely. */
+      label?: string;
+    };
+
+/** Any event the narration core accepts. Tool events are told apart by their `phase`. */
+export type NarrationEvent = ToolEvent | LifecycleEvent;
+
+/** The live status line: what is happening right now, and since when. */
+export interface NowLine {
+  text: string;
+  since: number;
+}
+
+/** All the work done for one message. */
+export interface NarrationGroup {
+  id: string;
+  /** The message that started the group, once known. */
+  text?: string;
+  followUp: boolean;
+  status: "active" | "done" | "stopped";
+  /** Only while active. */
+  now: NowLine | null;
+  entries: readonly NarrationEntry[];
+  startedAt: number;
+  endedAt?: number;
+  error?: string;
+}
+
+/** Galaxy work that was started and hasn't been reported finished yet. */
+export interface GalaxyWork {
+  /** The tool call that started it. */
+  id: string;
+  title: string;
+  since: number;
+}
+
+export interface NarrationState {
+  groups: readonly NarrationGroup[];
+  galaxyRunning: readonly GalaxyWork[];
+}

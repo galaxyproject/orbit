@@ -3,8 +3,18 @@ import {
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
-import { narrate } from "../app/src/renderer/whats-happening/core/narrator.js";
-import type { NarrationEntry, ToolEvent } from "../app/src/renderer/whats-happening/core/types.js";
+import {
+  advance,
+  currentStatus,
+  EMPTY_STATE,
+  narrate,
+} from "../app/src/renderer/whats-happening/core/narrator.js";
+import type {
+  NarrationEntry,
+  NarrationEvent,
+  NarrationState,
+  ToolEvent,
+} from "../app/src/renderer/whats-happening/core/types.js";
 
 const start = (id: string, at = 1000): ToolEvent => ({
   id,
@@ -120,5 +130,130 @@ describe("describeToolCall", () => {
       "Working with Galaxy: get_dataset_details",
     );
     expect(describeToolCall("edit", {})).toBe("Using edit");
+  });
+});
+
+function play(events: NarrationEvent[]): NarrationState {
+  return events.reduce<NarrationState>(advance, EMPTY_STATE);
+}
+
+const runTool = (id: string, phase: "start" | "end", at: number, isError = false): ToolEvent => ({
+  id,
+  toolName: "mcp__galaxy__run_tool",
+  phase,
+  at,
+  args: { tool_id: "random_lines1" },
+  isError,
+});
+
+describe("advance: groups and the live status line", () => {
+  it("opens a group per message and shows a status straight away", () => {
+    const state = play([{ kind: "group-start", at: 0 }]);
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0].status).toBe("active");
+    expect(currentStatus(state)).toEqual({ text: "Reading your request…", since: 0 });
+  });
+
+  it("follows the model through thinking, a tool call and its reply", () => {
+    const steps: [NarrationEvent, string][] = [
+      [{ kind: "group-start", at: 0 }, "Reading your request…"],
+      [{ kind: "model", activity: "thinking", at: 1 }, "Thinking…"],
+      [{ kind: "model", activity: "tool-call", at: 12 }, "Preparing the next step…"],
+      [runTool("t1", "start", 13), "Running random_lines1…"],
+      [runTool("t1", "end", 15), "Deciding the next step…"],
+      [{ kind: "model", activity: "writing", at: 16 }, "Writing a reply…"],
+    ];
+    let state = EMPTY_STATE;
+    for (const [event, expected] of steps) {
+      state = advance(state, event);
+      expect(currentStatus(state)?.text).toBe(expected);
+    }
+  });
+
+  it("keeps the same state while the same activity keeps streaming", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "model", activity: "thinking", at: 1 },
+    ]);
+    expect(advance(state, { kind: "model", activity: "thinking", at: 5 })).toBe(state);
+    expect(currentStatus(state)?.since).toBe(1);
+  });
+
+  it("closes the group on group-end, and records why when it stopped", () => {
+    const done = play([
+      { kind: "group-start", at: 0 },
+      { kind: "group-end", at: 17 },
+    ]);
+    expect(done.groups[0]).toMatchObject({ status: "done", now: null, endedAt: 17 });
+    const stopped = play([
+      { kind: "group-start", at: 0 },
+      { kind: "group-end", at: 3, error: "model unavailable" },
+    ]);
+    expect(stopped.groups[0]).toMatchObject({ status: "stopped", error: "model unavailable" });
+  });
+
+  it("keeps saying Galaxy is working after the group ends, until it reports finished", () => {
+    const afterTurn = play([
+      { kind: "group-start", at: 0 },
+      runTool("t1", "start", 13),
+      runTool("t1", "end", 15),
+      { kind: "group-end", at: 17 },
+    ]);
+    expect(currentStatus(afterTurn)).toEqual({
+      text: "Galaxy is still working: Running random_lines1",
+      since: 15,
+    });
+    const finished = advance(afterTurn, {
+      kind: "galaxy-finished",
+      at: 36,
+      label: "random_lines1",
+    });
+    expect(currentStatus(finished)).toBeNull();
+  });
+
+  it("does not count failed or non-Galaxy calls as running Galaxy work", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      runTool("t1", "start", 1),
+      runTool("t1", "end", 2, true),
+      { id: "e1", toolName: "edit", phase: "start", at: 3 },
+      { id: "e1", toolName: "edit", phase: "end", at: 4 },
+      { kind: "group-end", at: 5 },
+    ]);
+    expect(state.galaxyRunning).toEqual([]);
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("does not wait on uploads, whose finish is never reported", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { id: "u1", toolName: "galaxy_upload_local_file", phase: "start", at: 1 },
+      { id: "u1", toolName: "galaxy_upload_local_file", phase: "end", at: 2 },
+      { kind: "group-end", at: 3 },
+    ]);
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("marks a group the harness started itself as a follow-up", () => {
+    const state = play([
+      { kind: "group-start", at: 36 },
+      { kind: "group-info", at: 36, text: "[auto] check the job", followUp: true },
+    ]);
+    expect(state.groups[0]).toMatchObject({ followUp: true, text: "[auto] check the job" });
+    expect(currentStatus(state)?.text).toBe("Checking on your Galaxy work…");
+  });
+
+  it("starts a new group for each message and closes one left open", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "group-start", at: 10 },
+    ]);
+    expect(state.groups.map((g) => g.status)).toEqual(["done", "active"]);
+  });
+
+  it("opens a group for a tool call that arrives outside one", () => {
+    const state = play([runTool("t1", "start", 5)]);
+    expect(state.groups).toHaveLength(1);
+    expect(state.groups[0].entries.map((e) => e.status)).toEqual(["running"]);
   });
 });
