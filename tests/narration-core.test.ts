@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  classifyTool,
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
@@ -42,6 +43,7 @@ describe("narrate", () => {
       {
         id: "a",
         toolName: "galaxy_run_tool",
+        kind: "change",
         status: "running",
         title: "Running __BUILD_LIST__",
         links: [],
@@ -255,5 +257,104 @@ describe("advance: groups and the live status line", () => {
     const state = play([runTool("t1", "start", 5)]);
     expect(state.groups).toHaveLength(1);
     expect(state.groups[0].entries.map((e) => e.status)).toEqual(["running"]);
+  });
+});
+
+describe("classifyTool", () => {
+  // Every tool galaxy-mcp >= 1.9 offers, by the kind the user should see it as.
+  const MCP_TOOLS: Record<string, string[]> = {
+    change: [
+      "run_tool",
+      "run_user_tool",
+      "invoke_workflow",
+      "upload_file",
+      "upload_file_from_url",
+      "create_history",
+      "update_history",
+      "import_workflow_from_iwc",
+      "cancel_workflow_invocation",
+      "create_user_tool",
+      "delete_user_tool",
+      "create_page",
+      "update_page",
+      "revert_page_revision",
+    ],
+    wait: ["get_job_details", "get_invocations"],
+    look: [
+      "check_compatibility",
+      "connect",
+      "download_dataset",
+      "get_assemblies",
+      "get_assembly_details",
+      "get_collection_details",
+      "get_compatible_workflows",
+      "get_dataset_details",
+      "get_histories",
+      "get_history_contents",
+      "get_history_details",
+      "get_iwc_workflow_details",
+      "get_iwc_workflows",
+      "get_organism",
+      "get_page",
+      "get_page_revision",
+      "get_server_info",
+      "get_tool_citations",
+      "get_tool_details",
+      "get_tool_input_template",
+      "get_tool_panel",
+      "get_tool_run_examples",
+      "get_user",
+      "get_workflow_details",
+      "get_workflow_input_template",
+      "get_workflows_in_category",
+      "list_history_ids",
+      "list_page_revisions",
+      "list_pages",
+      "list_user_tools",
+      "list_workflow_categories",
+      "list_workflows",
+      "recommend_iwc_workflows",
+      "resolve_workflow_inputs",
+      "search_ena",
+      "search_ena_keywords",
+      "search_iwc_workflows",
+      "search_organisms",
+      "search_tools_by_keywords",
+      "search_tools_by_name",
+    ],
+  };
+
+  for (const [kind, tools] of Object.entries(MCP_TOOLS)) {
+    it(`classifies every known ${kind} tool, whatever the harness prefix`, () => {
+      for (const tool of tools) {
+        for (const name of [`galaxy_${tool}`, `mcp__galaxy__${tool}`]) {
+          expect([name, classifyTool(name)]).toEqual([name, kind]);
+        }
+      }
+    });
+  }
+
+  it("treats the harness's own Galaxy tools by what they do", () => {
+    expect(classifyTool("galaxy_upload_local_file")).toBe("change");
+    expect(classifyTool("galaxy_invocation_check_one")).toBe("wait");
+    expect(classifyTool("galaxy_job_record")).toBe("internal");
+  });
+
+  it("judges an unknown Galaxy tool by its name, defaulting to a look", () => {
+    expect(classifyTool("galaxy_create_workflow")).toBe("change");
+    expect(classifyTool("galaxy_delete_dataset")).toBe("change");
+    expect(classifyTool("galaxy_get_new_thing")).toBe("look");
+    expect(classifyTool("galaxy_something_else")).toBe("look");
+  });
+
+  it("treats non-Galaxy tools as the harness's own bookkeeping", () => {
+    for (const name of ["edit", "read", "write", "bash"]) {
+      expect(classifyTool(name)).toBe("internal");
+    }
+  });
+
+  it("still knows bare Galaxy names from the map", () => {
+    expect(classifyTool("run_tool")).toBe("change");
+    expect(classifyTool("get_job_details")).toBe("wait");
   });
 });

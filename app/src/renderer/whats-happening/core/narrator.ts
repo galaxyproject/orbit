@@ -7,7 +7,7 @@
  * so a caller can skip a redraw with a plain `===` check.
  */
 
-import { describeToolCall, startsGalaxyWork } from "./catalog.js";
+import { classifyTool, describeToolCall, startsGalaxyWork } from "./catalog.js";
 import type {
   NarrationEntry,
   NarrationEvent,
@@ -30,6 +30,7 @@ export function narrate(
         {
           id: event.id,
           toolName: event.toolName,
+          kind: classifyTool(event.toolName),
           status: "running",
           title: describeToolCall(event.toolName, event.args),
           links: [],

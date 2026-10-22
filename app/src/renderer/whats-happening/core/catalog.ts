@@ -7,6 +7,8 @@
  * entry gets a generic fallback title rather than nothing.
  */
 
+import type { ToolKind } from "./types.js";
+
 const GALAXY_PREFIXES = ["mcp__galaxy__", "galaxy_"];
 
 export interface NormalizedToolName {
@@ -28,6 +30,70 @@ type Describer = (args: Record<string, unknown>) => string;
 const DESCRIBERS: Record<string, Describer> = {
   run_tool: (args) => `Running ${galaxyToolLabel(args.tool_id)}`,
 };
+
+/**
+ * The kind of every known Galaxy tool (bare names). Galaxy MCP tools first,
+ * then the Galaxy tools harnesses add for their own records. Read-only
+ * `get_*` / `search_*` / `list_*` tools are covered by the name rules below,
+ * so only exceptions to those rules need listing.
+ */
+const KNOWN_KINDS: Record<string, ToolKind> = {
+  run_tool: "change",
+  run_user_tool: "change",
+  invoke_workflow: "change",
+  upload_file: "change",
+  upload_file_from_url: "change",
+  upload_local_file: "change",
+  create_history: "change",
+  update_history: "change",
+  import_workflow_from_iwc: "change",
+  cancel_workflow_invocation: "change",
+  create_user_tool: "change",
+  delete_user_tool: "change",
+  create_page: "change",
+  update_page: "change",
+  revert_page_revision: "change",
+  get_job_details: "wait",
+  get_invocations: "wait",
+  invocation_check_one: "wait",
+  invocation_check_all: "wait",
+  connect: "look",
+  check_compatibility: "look",
+  download_dataset: "look",
+  job_record: "internal",
+  invocation_record: "internal",
+  set_profile: "internal",
+};
+
+const CHANGE_PREFIXES = [
+  "run_",
+  "invoke_",
+  "upload_",
+  "create_",
+  "update_",
+  "delete_",
+  "import_",
+  "cancel_",
+  "revert_",
+];
+
+/**
+ * What a call means to the user. Known tools use the map; an unknown Galaxy
+ * tool is judged by its name, defaulting to a read-only look so a new tool
+ * never shows up as a change it isn't; anything that isn't a Galaxy tool is
+ * the harness's own bookkeeping.
+ */
+export function classifyTool(toolName: string): ToolKind {
+  const { name, galaxy } = normalizeToolName(toolName);
+  const known = KNOWN_KINDS[name];
+  if (known) {
+    return known;
+  }
+  if (!galaxy) {
+    return "internal";
+  }
+  return CHANGE_PREFIXES.some((p) => name.startsWith(p)) ? "change" : "look";
+}
 
 /**
  * Galaxy MCP tools whose success means Galaxy keeps working after the call

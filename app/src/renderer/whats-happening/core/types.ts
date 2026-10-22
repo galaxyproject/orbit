@@ -41,11 +41,21 @@ export interface GalaxyRef {
   label: string;
 }
 
+/**
+ * What a tool call means to the user:
+ * - `change`: alters their Galaxy (runs a tool, uploads, creates a history, …)
+ * - `look`: reads from Galaxy without changing anything
+ * - `wait`: checks on work that is already running
+ * - `internal`: the harness's own bookkeeping (files, notes, records)
+ */
+export type ToolKind = "change" | "look" | "wait" | "internal";
+
 /** One human-readable line in the narration. */
 export interface NarrationEntry {
   /** The `ToolEvent.id` this entry narrates. */
   id: string;
   toolName: string;
+  kind: ToolKind;
   status: "running" | "done" | "failed";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;
