@@ -73,9 +73,7 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
   if ("phase" in event) return advanceTool(state, event);
   switch (event.kind) {
     case "group-start": {
-      const groups = state.groups.map((g) =>
-        g.status === "active" ? { ...g, status: "done" as const, now: null, endedAt: event.at } : g,
-      );
+      const groups = state.groups.map((g) => (g.status === "active" ? close(g, event.at) : g));
       const group: NarrationGroup = {
         id: `g${state.groups.length + 1}`,
         followUp: false,
@@ -99,15 +97,42 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
     case "model":
       return updateActive(state, (g) => withNow(g, MODEL_STATUS[event.activity], event.at));
     case "group-end":
-      return updateActive(state, (g) => ({
-        ...g,
-        status: event.error ? "stopped" : "done",
-        now: null,
-        endedAt: event.at,
-        ...(event.error ? { error: event.error } : {}),
-      }));
+      return updateActive(state, (g) =>
+        event.error
+          ? { ...g, status: "stopped", now: null, endedAt: event.at, error: event.error }
+          : close(g, event.at),
+      );
+    case "awaiting-user": {
+      // Usually arrives mid-group (the call that asked ended, the model is still
+      // replying); if the group has already ended, it still belongs to it.
+      const last = state.groups[state.groups.length - 1];
+      if (!last) {
+        return state;
+      }
+      const waitingFor = { text: event.text, since: event.at };
+      const updated: NarrationGroup =
+        last.status === "done"
+          ? { ...last, status: "waiting", waitingFor }
+          : { ...last, waitingFor };
+      return { ...state, groups: [...state.groups.slice(0, -1), updated] };
+    }
+    case "user-replied": {
+      if (!state.groups.some((g) => g.waitingFor)) {
+        return state;
+      }
+      return {
+        ...state,
+        groups: state.groups.map((g) => {
+          if (!g.waitingFor) return g;
+          const { waitingFor: _answered, ...rest } = g;
+          return rest.status === "waiting" ? { ...rest, status: "done" as const } : rest;
+        }),
+      };
+    }
     case "galaxy-finished": {
-      if (state.galaxyRunning.length === 0) return state;
+      if (state.galaxyRunning.length === 0) {
+        return state;
+      }
       const label = event.label?.toLowerCase();
       const index = label
         ? state.galaxyRunning.findIndex((w) => w.title.toLowerCase().includes(label))
@@ -150,12 +175,17 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
 }
 
 /**
- * The single line to show right now: the active group's status, or else the
- * Galaxy work still running after its group ended, or nothing when idle.
+ * The single line to show right now: the active group's status, or else what
+ * the user needs to do, or else the Galaxy work still running after its group
+ * ended, or nothing when idle.
  */
 export function currentStatus(state: NarrationState): NowLine | null {
   const active = activeGroup(state);
   if (active?.now) return active.now;
+  const waiting = state.groups.findLast((g) => g.status === "waiting")?.waitingFor;
+  if (waiting) {
+    return { text: `Waiting for you: ${waiting.text}`, since: waiting.since };
+  }
   const work = state.galaxyRunning[0];
   if (!work) return null;
   const more = state.galaxyRunning.length - 1;
@@ -179,6 +209,11 @@ function updateActive(
   const updated = change(active);
   if (updated === active) return state;
   return { ...state, groups: [...state.groups.slice(0, -1), updated] };
+}
+
+/** Ends a group without an error: waiting if it left the user something to do, else done. */
+function close(group: NarrationGroup, at: number): NarrationGroup {
+  return { ...group, status: group.waitingFor ? "waiting" : "done", now: null, endedAt: at };
 }
 
 /** Sets the status line, keeping `since` (and the same object) when the text hasn't changed. */

@@ -87,7 +87,18 @@ export type LifecycleEvent =
       at: number;
       /** What the harness called the finished work, when it said; matched loosely. */
       label?: string;
-    };
+    }
+  | {
+      /**
+       * The harness can't go on until the user acts: an approval, a permission
+       * prompt, a question. Optional; harnesses without such a step never send it.
+       */
+      kind: "awaiting-user";
+      at: number;
+      /** What the user needs to do, in plain words, e.g. `approve "Select random lines" (/approve prop-4esjcv)`. */
+      text: string;
+    }
+  | { kind: "user-replied"; at: number };
 
 /** Any event the narration core accepts. Tool events are told apart by their `phase`. */
 export type NarrationEvent = ToolEvent | LifecycleEvent;
@@ -104,9 +115,12 @@ export interface NarrationGroup {
   /** The message that started the group, once known. */
   text?: string;
   followUp: boolean;
-  status: "active" | "done" | "stopped";
+  /** `waiting`: the group ended, and the harness is waiting on the user (see `waitingFor`). */
+  status: "active" | "done" | "stopped" | "waiting";
   /** Only while active. */
   now: NowLine | null;
+  /** What the user needs to do before the harness can go on, until they reply. */
+  waitingFor?: NowLine;
   entries: readonly NarrationEntry[];
   startedAt: number;
   endedAt?: number;

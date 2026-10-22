@@ -260,6 +260,70 @@ describe("advance: groups and the live status line", () => {
   });
 });
 
+describe("advance: waiting on the user", () => {
+  const asked: NarrationEvent = { kind: "awaiting-user", at: 4, text: "approve the run" };
+
+  it("ends a group that left the user something to do as waiting, not done", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      asked,
+      { kind: "model", activity: "writing", at: 5 },
+      { kind: "group-end", at: 9 },
+    ]);
+    expect(state.groups[0]).toMatchObject({
+      status: "waiting",
+      waitingFor: { text: "approve the run", since: 4 },
+    });
+    expect(currentStatus(state)).toEqual({ text: "Waiting for you: approve the run", since: 4 });
+  });
+
+  it("keeps the live status line while the group is still working", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      asked,
+      { kind: "model", activity: "writing", at: 5 },
+    ]);
+    expect(currentStatus(state)?.text).toBe("Writing a reply…");
+  });
+
+  it("also marks a group that has already ended", () => {
+    const state = play([{ kind: "group-start", at: 0 }, { kind: "group-end", at: 3 }, asked]);
+    expect(state.groups[0].status).toBe("waiting");
+  });
+
+  it("puts the user's action ahead of Galaxy work still running", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      runTool("t1", "start", 1),
+      runTool("t1", "end", 2),
+      asked,
+      { kind: "group-end", at: 9 },
+    ]);
+    expect(currentStatus(state)?.text).toBe("Waiting for you: approve the run");
+  });
+
+  it("clears the wait once the user replies, even without a new group", () => {
+    const waiting = play([{ kind: "group-start", at: 0 }, asked, { kind: "group-end", at: 9 }]);
+    const replied = advance(waiting, { kind: "user-replied", at: 20 });
+    expect(replied.groups[0].status).toBe("done");
+    expect(replied.groups[0].waitingFor).toBeUndefined();
+    expect(currentStatus(replied)).toBeNull();
+  });
+
+  it("closes a waiting group left open by the next message as waiting", () => {
+    const state = play([{ kind: "group-start", at: 0 }, asked, { kind: "group-start", at: 10 }]);
+    expect(state.groups.map((g) => g.status)).toEqual(["waiting", "active"]);
+  });
+
+  it("changes nothing when the user replies with nothing to answer", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "group-end", at: 3 },
+    ]);
+    expect(advance(state, { kind: "user-replied", at: 5 })).toBe(state);
+  });
+});
+
 describe("classifyTool", () => {
   // Every tool galaxy-mcp >= 1.9 offers, by the kind the user should see it as.
   const MCP_TOOLS: Record<string, string[]> = {
