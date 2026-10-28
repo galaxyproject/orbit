@@ -97,8 +97,18 @@ export type LifecycleEvent =
       at: number;
       /** What the user needs to do, in plain words, e.g. `approve "Select random lines" (/approve prop-4esjcv)`. */
       text: string;
+      /**
+       * Names this request, so several can be pending at once and a reply can
+       * answer just one. Asking again with the same id updates that request.
+       */
+      id?: string;
     }
-  | { kind: "user-replied"; at: number };
+  | {
+      kind: "user-replied";
+      at: number;
+      /** The request this answers. Without one, the reply answers everything pending. */
+      id?: string;
+    };
 
 /** Any event the narration core accepts. Tool events are told apart by their `phase`. */
 export type NarrationEvent = ToolEvent | LifecycleEvent;
@@ -107,6 +117,11 @@ export type NarrationEvent = ToolEvent | LifecycleEvent;
 export interface NowLine {
   text: string;
   since: number;
+}
+
+/** Something the harness is waiting on the user for. */
+export interface WaitingRequest extends NowLine {
+  id?: string;
 }
 
 /** All the work done for one message. */
@@ -119,8 +134,8 @@ export interface NarrationGroup {
   status: "active" | "done" | "stopped" | "waiting";
   /** Only while active. */
   now: NowLine | null;
-  /** What the user needs to do before the harness can go on, until they reply. */
-  waitingFor?: NowLine;
+  /** What the user needs to do before the harness can go on, oldest first, until they reply. */
+  waitingFor?: readonly WaitingRequest[];
   entries: readonly NarrationEntry[];
   startedAt: number;
   endedAt?: number;

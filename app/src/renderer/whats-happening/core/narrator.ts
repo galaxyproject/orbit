@@ -15,6 +15,7 @@ import type {
   NarrationState,
   NowLine,
   ToolEvent,
+  WaitingRequest,
 } from "./types.js";
 
 export function narrate(
@@ -109,7 +110,18 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       if (!last) {
         return state;
       }
-      const waitingFor = { text: event.text, since: event.at };
+      const request: WaitingRequest = {
+        text: event.text,
+        since: event.at,
+        ...(event.id ? { id: event.id } : {}),
+      };
+      const pending = last.waitingFor ?? [];
+      const same = event.id ? pending.findIndex((r) => r.id === event.id) : -1;
+      // Asking again under the same id updates that request and keeps its place and age.
+      const waitingFor =
+        same === -1
+          ? [...pending, request]
+          : pending.map((r, i) => (i === same ? { ...r, text: event.text } : r));
       const updated: NarrationGroup =
         last.status === "done"
           ? { ...last, status: "waiting", waitingFor }
@@ -117,13 +129,21 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       return { ...state, groups: [...state.groups.slice(0, -1), updated] };
     }
     case "user-replied": {
-      if (!state.groups.some((g) => g.waitingFor)) {
+      const answers = (r: WaitingRequest): boolean => !event.id || r.id === event.id;
+      if (!state.groups.some((g) => g.waitingFor?.some(answers))) {
         return state;
       }
       return {
         ...state,
         groups: state.groups.map((g) => {
-          if (!g.waitingFor) return g;
+          if (!g.waitingFor?.some(answers)) {
+            return g;
+          }
+
+          const left = g.waitingFor.filter((r) => !answers(r));
+          if (left.length > 0) {
+            return { ...g, waitingFor: left };
+          }
           const { waitingFor: _answered, ...rest } = g;
           return rest.status === "waiting" ? { ...rest, status: "done" as const } : rest;
         }),
@@ -181,13 +201,27 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
  */
 export function currentStatus(state: NarrationState): NowLine | null {
   const active = activeGroup(state);
-  if (active?.now) return active.now;
-  const waiting = state.groups.findLast((g) => g.status === "waiting")?.waitingFor;
-  if (waiting) {
-    return { text: `Waiting for you: ${waiting.text}`, since: waiting.since };
+  if (active?.now) {
+    return active.now;
   }
+
+  const waiting = state.groups
+    .filter((g) => g.status === "waiting")
+    .flatMap((g) => g.waitingFor ?? [])
+    .sort((a, b) => a.since - b.since);
+
+  if (waiting.length > 0) {
+    const more = waiting.length - 1;
+    return {
+      text: `Waiting for you: ${waiting[0].text}${more > 0 ? ` (+${more} more)` : ""}`,
+      since: waiting[0].since,
+    };
+  }
+
   const work = state.galaxyRunning[0];
-  if (!work) return null;
+  if (!work) {
+    return null;
+  }
   const more = state.galaxyRunning.length - 1;
   return {
     text: `Galaxy is still working: ${work.title}${more > 0 ? ` (+${more} more)` : ""}`,
@@ -213,7 +247,8 @@ function updateActive(
 
 /** Ends a group without an error: waiting if it left the user something to do, else done. */
 function close(group: NarrationGroup, at: number): NarrationGroup {
-  return { ...group, status: group.waitingFor ? "waiting" : "done", now: null, endedAt: at };
+  const waiting = (group.waitingFor?.length ?? 0) > 0;
+  return { ...group, status: waiting ? "waiting" : "done", now: null, endedAt: at };
 }
 
 /** Sets the status line, keeping `since` (and the same object) when the text hasn't changed. */

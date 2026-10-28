@@ -272,7 +272,7 @@ describe("advance: waiting on the user", () => {
     ]);
     expect(state.groups[0]).toMatchObject({
       status: "waiting",
-      waitingFor: { text: "approve the run", since: 4 },
+      waitingFor: [{ text: "approve the run", since: 4 }],
     });
     expect(currentStatus(state)).toEqual({ text: "Waiting for you: approve the run", since: 4 });
   });
@@ -313,6 +313,80 @@ describe("advance: waiting on the user", () => {
   it("closes a waiting group left open by the next message as waiting", () => {
     const state = play([{ kind: "group-start", at: 0 }, asked, { kind: "group-start", at: 10 }]);
     expect(state.groups.map((g) => g.status)).toEqual(["waiting", "active"]);
+  });
+
+  it("keeps several requests at once and shows the oldest, with a count", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", at: 6, text: "approve run B", id: "b" },
+      { kind: "group-end", at: 9 },
+    ]);
+    expect(state.groups[0].waitingFor?.map((r) => r.id)).toEqual(["a", "b"]);
+    expect(currentStatus(state)).toEqual({
+      text: "Waiting for you: approve run A (+1 more)",
+      since: 4,
+    });
+  });
+
+  it("answers only the request a reply names, and stays waiting for the rest", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", at: 6, text: "approve run B", id: "b" },
+      { kind: "group-end", at: 9 },
+      { kind: "user-replied", at: 12, id: "a" },
+    ]);
+    expect(state.groups[0].status).toBe("waiting");
+    expect(currentStatus(state)).toEqual({ text: "Waiting for you: approve run B", since: 6 });
+    const done = advance(state, { kind: "user-replied", at: 15, id: "b" });
+    expect(done.groups[0].status).toBe("done");
+    expect(done.groups[0].waitingFor).toBeUndefined();
+  });
+
+  it("answers everything pending when a reply names no request", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", at: 6, text: "approve run B" },
+      { kind: "group-end", at: 9 },
+      { kind: "user-replied", at: 12 },
+    ]);
+    expect(state.groups[0].status).toBe("done");
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("ignores a reply to a request that isn't pending", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
+      { kind: "group-end", at: 9 },
+    ]);
+    expect(advance(state, { kind: "user-replied", at: 12, id: "zzz" })).toBe(state);
+  });
+
+  it("updates a request asked again under the same id, keeping its age", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", at: 7, text: "approve run A (edited)", id: "a" },
+      { kind: "group-end", at: 9 },
+    ]);
+    expect(state.groups[0].waitingFor).toEqual([
+      { text: "approve run A (edited)", since: 4, id: "a" },
+    ]);
+  });
+
+  it("collects requests from several messages, oldest first", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { kind: "awaiting-user", at: 2, text: "approve run A", id: "a" },
+      { kind: "group-end", at: 3 },
+      { kind: "group-start", at: 10 },
+      { kind: "awaiting-user", at: 12, text: "approve run B", id: "b" },
+      { kind: "group-end", at: 13 },
+    ]);
+    expect(currentStatus(state)?.text).toBe("Waiting for you: approve run A (+1 more)");
   });
 
   it("changes nothing when the user replies with nothing to answer", () => {
