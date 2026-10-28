@@ -1,3 +1,4 @@
+import { allOperations } from "@galaxyproject/galaxy-ops/browser";
 import { describe, expect, it } from "vitest";
 import {
   classifyTool,
@@ -44,6 +45,7 @@ describe("narrate", () => {
         id: "a",
         toolName: "galaxy_run_tool",
         kind: "change",
+        domain: "tools",
         status: "running",
         title: "Running __BUILD_LIST__",
         links: [],
@@ -102,9 +104,17 @@ describe("normalizeToolName", () => {
     expect(normalizeToolName("mcp__galaxy__run_tool")).toEqual({ name: "run_tool", galaxy: true });
   });
 
-  it("leaves bare and non-Galaxy names alone", () => {
-    expect(normalizeToolName("run_tool")).toEqual({ name: "run_tool", galaxy: false });
+  it("recognises a bare galaxy-ops operation name as a Galaxy tool", () => {
+    expect(normalizeToolName("run_tool")).toEqual({ name: "run_tool", galaxy: true });
+    expect(normalizeToolName("get_history_contents")).toEqual({
+      name: "get_history_contents",
+      galaxy: true,
+    });
+  });
+
+  it("leaves non-Galaxy names alone", () => {
     expect(normalizeToolName("edit")).toEqual({ name: "edit", galaxy: false });
+    expect(normalizeToolName("loom_propose")).toEqual({ name: "loom_propose", galaxy: false });
   });
 });
 
@@ -127,10 +137,16 @@ describe("describeToolCall", () => {
     expect(describeToolCall("galaxy_run_tool", undefined)).toBe("Running a Galaxy tool");
   });
 
-  it("falls back to a generic title for tools it does not know", () => {
-    expect(describeToolCall("galaxy_get_dataset_details", {})).toBe(
-      "Working with Galaxy: get_dataset_details",
+  it("titles other galaxy-ops operations by the first sentence of their summary", () => {
+    expect(describeToolCall("get_history_contents", {})).toBe(
+      "List the datasets and collections in a history, one page at a time",
     );
+    // Code marks in a summary are dropped.
+    expect(describeToolCall("get_dataset_details", {})).not.toContain("`");
+  });
+
+  it("falls back to a generic title for tools galaxy-ops does not know", () => {
+    expect(describeToolCall("galaxy_something_new", {})).toBe("Working with Galaxy: something_new");
     expect(describeToolCall("edit", {})).toBe("Using edit");
   });
 });
@@ -399,100 +415,68 @@ describe("advance: waiting on the user", () => {
 });
 
 describe("classifyTool", () => {
-  // Every tool galaxy-mcp >= 1.9 offers, by the kind the user should see it as.
-  const MCP_TOOLS: Record<string, string[]> = {
-    change: [
-      "run_tool",
-      "run_user_tool",
-      "invoke_workflow",
-      "upload_file",
-      "upload_file_from_url",
-      "create_history",
-      "update_history",
-      "import_workflow_from_iwc",
-      "cancel_workflow_invocation",
-      "create_user_tool",
-      "delete_user_tool",
-      "create_page",
-      "update_page",
-      "revert_page_revision",
-    ],
-    wait: ["get_job_details", "get_invocations"],
-    look: [
-      "check_compatibility",
-      "connect",
-      "download_dataset",
-      "get_assemblies",
-      "get_assembly_details",
-      "get_collection_details",
-      "get_compatible_workflows",
-      "get_dataset_details",
-      "get_histories",
-      "get_history_contents",
-      "get_history_details",
-      "get_iwc_workflow_details",
-      "get_iwc_workflows",
-      "get_organism",
-      "get_page",
-      "get_page_revision",
-      "get_server_info",
-      "get_tool_citations",
-      "get_tool_details",
-      "get_tool_input_template",
-      "get_tool_panel",
-      "get_tool_run_examples",
-      "get_user",
-      "get_workflow_details",
-      "get_workflow_input_template",
-      "get_workflows_in_category",
-      "list_history_ids",
-      "list_page_revisions",
-      "list_pages",
-      "list_user_tools",
-      "list_workflow_categories",
-      "list_workflows",
-      "recommend_iwc_workflows",
-      "resolve_workflow_inputs",
-      "search_ena",
-      "search_ena_keywords",
-      "search_iwc_workflows",
-      "search_organisms",
-      "search_tools_by_keywords",
-      "search_tools_by_name",
-    ],
-  };
-
-  for (const [kind, tools] of Object.entries(MCP_TOOLS)) {
-    it(`classifies every known ${kind} tool, whatever the harness prefix`, () => {
-      for (const tool of tools) {
-        for (const name of [`galaxy_${tool}`, `mcp__galaxy__${tool}`]) {
-          expect([name, classifyTool(name)]).toEqual([name, kind]);
-        }
+  it("gives every galaxy-ops operation a kind, under any harness spelling", () => {
+    for (const op of allOperations) {
+      for (const name of [op.name, `galaxy_${op.name}`, `mcp__galaxy__${op.name}`]) {
+        expect(["change", "look", "wait"]).toContain(classifyTool(name));
       }
-    });
-  }
-
-  it("treats the harness's own Galaxy tools by what they do", () => {
-    expect(classifyTool("galaxy_upload_local_file")).toBe("change");
-    expect(classifyTool("galaxy_invocation_check_one")).toBe("wait");
-    expect(classifyTool("galaxy_job_record")).toBe("internal");
-  });
-
-  it("judges an unknown Galaxy tool by its name, defaulting to a look", () => {
-    expect(classifyTool("galaxy_create_workflow")).toBe("change");
-    expect(classifyTool("galaxy_delete_dataset")).toBe("change");
-    expect(classifyTool("galaxy_get_new_thing")).toBe("look");
-    expect(classifyTool("galaxy_something_else")).toBe("look");
-  });
-
-  it("treats non-Galaxy tools as the harness's own bookkeeping", () => {
-    for (const name of ["edit", "read", "write", "bash"]) {
-      expect(classifyTool(name)).toBe("internal");
     }
   });
 
-  it("still knows bare Galaxy names from the map", () => {
-    expect(classifyTool("run_tool")).toBe("change");
+  it("follows galaxy-ops: an operation that writes is a change, a read is a look", () => {
+    for (const op of allOperations) {
+      if (["get_job_details", "get_invocations", "download_dataset"].includes(op.name)) continue;
+      expect([op.name, classifyTool(op.name)]).toEqual([
+        op.name,
+        op.readOnly === false ? "change" : "look",
+      ]);
+    }
+  });
+
+  it("overrides what galaxy-ops can't say: checks on running work, and downloads", () => {
     expect(classifyTool("get_job_details")).toBe("wait");
+    expect(classifyTool("get_invocations")).toBe("wait");
+    expect(classifyTool("download_dataset")).toBe("look");
+  });
+
+  it("classifies the bare names Orbit uses today", () => {
+    expect(classifyTool("run_tool")).toBe("change");
+    expect(classifyTool("get_history_contents")).toBe("look");
+    expect(classifyTool("cancel_workflow_invocation")).toBe("change");
+  });
+
+  it("treats Orbit's own Galaxy helpers by what they do", () => {
+    expect(classifyTool("galaxy_read_output")).toBe("internal");
+    expect(classifyTool("galaxy_job_record")).toBe("internal");
+    expect(classifyTool("galaxy_invocation_check_one")).toBe("wait");
+    expect(classifyTool("list_jobs")).toBe("wait");
+    expect(classifyTool("get_job_logs")).toBe("look");
+  });
+
+  it("judges a prefixed Galaxy tool galaxy-ops doesn't know by its name, defaulting to a look", () => {
+    expect(classifyTool("galaxy_create_workflow")).toBe("change");
+    expect(classifyTool("mcp__galaxy__search_ena")).toBe("look");
+    expect(classifyTool("galaxy_something_else")).toBe("look");
+  });
+
+  it("treats tools that aren't Galaxy's as the harness's own bookkeeping", () => {
+    for (const name of ["edit", "read", "write", "bash", "loom_propose"]) {
+      expect(classifyTool(name)).toBe("internal");
+    }
+  });
+});
+
+describe("narrate: galaxy-ops facts on entries", () => {
+  it("records the operation's domain, and flags destructive ones", () => {
+    const entries = fold([
+      { id: "c", toolName: "cancel_workflow_invocation", phase: "start", at: 1 },
+      { id: "h", toolName: "get_history_contents", phase: "start", at: 2 },
+      { id: "e", toolName: "edit", phase: "start", at: 3 },
+    ]);
+    expect(entries.map((e) => [e.domain, e.destructive])).toEqual([
+      ["invocations", true],
+      ["histories", undefined],
+      [undefined, undefined],
+    ]);
   });
 });

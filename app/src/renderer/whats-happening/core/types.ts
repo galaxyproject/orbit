@@ -56,6 +56,10 @@ export interface NarrationEntry {
   id: string;
   toolName: string;
   kind: ToolKind;
+  /** The galaxy-ops domain of the operation (`histories`, `jobs`, `tools`, …), when it is one. */
+  domain?: string;
+  /** Set when galaxy-ops marks the operation destructive (deleting or cancelling something). */
+  destructive?: boolean;
   status: "running" | "done" | "failed";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;

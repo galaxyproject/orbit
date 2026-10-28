@@ -7,7 +7,7 @@
  * so a caller can skip a redraw with a plain `===` check.
  */
 
-import { classifyTool, describeToolCall, startsGalaxyWork } from "./catalog.js";
+import { classifyTool, describeToolCall, operationFor, startsGalaxyWork } from "./catalog.js";
 import type {
   NarrationEntry,
   NarrationEvent,
@@ -32,6 +32,7 @@ export function narrate(
           id: event.id,
           toolName: event.toolName,
           kind: classifyTool(event.toolName),
+          ...galaxyFacts(event.toolName),
           status: "running",
           title: describeToolCall(event.toolName, event.args),
           links: [],
@@ -255,4 +256,11 @@ function close(group: NarrationGroup, at: number): NarrationGroup {
 function withNow(group: NarrationGroup, text: string, at: number): NarrationGroup {
   if (group.now?.text === text) return group;
   return { ...group, now: { text, since: at } };
+}
+
+/** What galaxy-ops says about the operation behind a tool, for the entry. */
+function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destructive"> {
+  const op = operationFor(toolName);
+  if (!op) return {};
+  return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
 }
