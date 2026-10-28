@@ -5,6 +5,7 @@ import {
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
+import { startedWork } from "../app/src/renderer/whats-happening/core/results.js";
 import {
   advance,
   currentStatus,
@@ -478,5 +479,175 @@ describe("narrate: galaxy-ops facts on entries", () => {
       ["histories", undefined],
       [undefined, undefined],
     ]);
+  });
+});
+
+describe("startedWork: the Galaxy work a result names", () => {
+  const envelope = (data: unknown, success = true) => ({ data, success, message: "" });
+
+  it("reads the jobs a tool run submitted, from the envelope object or its JSON text", () => {
+    const result = envelope({ jobs: [{ id: "j1", state: "queued" }, { id: "j2" }], outputs: [] });
+    const expected = [
+      { kind: "job", id: "j1", state: "queued" },
+      { kind: "job", id: "j2", state: "new" },
+    ];
+    expect(startedWork("run_tool", result)).toEqual(expected);
+    expect(startedWork("galaxy_run_tool", JSON.stringify(result))).toEqual(expected);
+  });
+
+  it("reads one invocation or a batch from invoke_workflow", () => {
+    expect(startedWork("invoke_workflow", envelope({ id: "i1", state: "new" }))).toEqual([
+      { kind: "invocation", id: "i1", state: "new" },
+    ]);
+    expect(startedWork("invoke_workflow", envelope([{ id: "i1" }, { id: "i2" }]))).toHaveLength(2);
+  });
+
+  it("finds nothing in a failed call, another operation, or something that isn't an envelope", () => {
+    expect(startedWork("run_tool", envelope({ jobs: [{ id: "j1" }] }, false))).toEqual([]);
+    expect(startedWork("get_job_details", envelope({ jobs: [{ id: "j1" }] }))).toEqual([]);
+    expect(startedWork("run_tool", "not json")).toEqual([]);
+    expect(startedWork("run_tool", { content: [] })).toEqual([]);
+  });
+});
+
+describe("advance: rows follow their Galaxy jobs", () => {
+  const submitted = (id: string, jobs: { id: string; state?: string }[], at = 2): ToolEvent => ({
+    id,
+    toolName: "run_tool",
+    phase: "end",
+    at,
+    result: { data: { jobs }, success: true },
+  });
+  const started = (id: string, at = 1): ToolEvent => ({
+    id,
+    toolName: "run_tool",
+    phase: "start",
+    at,
+    args: { tool_id: "fasterq_dump" },
+  });
+
+  it("keeps a row running after the call returns, until Galaxy finishes the job", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [{ id: "j1", state: "queued" }]),
+      { kind: "group-end", at: 5 },
+    ]);
+    const [entry] = state.groups[0].entries;
+    expect(entry.status).toBe("running");
+    expect(entry.endedAt).toBeUndefined();
+    expect(currentStatus(state)).toEqual({
+      text: "Galaxy is still working: Running fasterq_dump",
+      since: 2,
+    });
+
+    const done = advance(state, { kind: "job-state", at: 40, id: "j1", state: "ok" });
+    expect(done.groups[0].entries[0]).toMatchObject({ status: "done", endedAt: 40 });
+    expect(currentStatus(done)).toBeNull();
+  });
+
+  it("marks the row failed when its job fails", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [{ id: "j1", state: "queued" }]),
+      { kind: "job-state", at: 30, id: "j1", state: "error" },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("failed");
+  });
+
+  it("waits for every job a call started, and counts the rest", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [
+        { id: "j1", state: "queued" },
+        { id: "j2", state: "queued" },
+      ]),
+      { kind: "group-end", at: 5 },
+      { kind: "job-state", at: 20, id: "j1", state: "ok" },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("running");
+    expect(currentStatus(state)?.text).toBe("Galaxy is still working: Running fasterq_dump");
+    const both = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [
+        { id: "j1", state: "queued" },
+        { id: "j2", state: "queued" },
+      ]),
+      { kind: "group-end", at: 5 },
+    ]);
+    expect(currentStatus(both)?.text).toBe(
+      "Galaxy is still working: Running fasterq_dump (+1 more)",
+    );
+  });
+
+  it("lets go of a job the harness stopped tracking, without calling it failed", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [{ id: "j1", state: "queued" }]),
+      { kind: "group-end", at: 5 },
+      { kind: "job-state", at: 9, id: "j1", state: "untracked" },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("done");
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("finishes a row when its workflow invocation completes", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { id: "w1", toolName: "invoke_workflow", phase: "start", at: 1 },
+      {
+        id: "w1",
+        toolName: "invoke_workflow",
+        phase: "end",
+        at: 2,
+        result: { data: { id: "i1", state: "new" }, success: true },
+      },
+      { kind: "job-state", at: 3, id: "i1", state: "scheduled" },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("running");
+    const done = advance(state, { kind: "job-state", at: 9, id: "i1", state: "completed" });
+    expect(done.groups[0].entries[0].status).toBe("done");
+  });
+
+  it("marks a job already finished when submitted as done straight away", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [{ id: "j1", state: "ok" }]),
+      { kind: "group-end", at: 5 },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("done");
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("tracks nothing when the call's envelope says it failed", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      {
+        id: "t1",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        result: { data: null, success: false, message: "bad inputs" },
+      },
+      { kind: "group-end", at: 5 },
+    ]);
+    expect(state.galaxyRunning).toEqual([]);
+  });
+
+  it("ignores a state for a job it doesn't know, and loose reports for jobs it tracks by id", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [{ id: "j1", state: "queued" }]),
+      { kind: "group-end", at: 5 },
+    ]);
+    expect(advance(state, { kind: "job-state", at: 9, id: "zzz", state: "ok" })).toBe(state);
+    expect(advance(state, { kind: "galaxy-finished", at: 9, label: "fasterq_dump" })).toBe(state);
   });
 });

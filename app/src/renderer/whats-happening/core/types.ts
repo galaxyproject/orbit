@@ -60,6 +60,12 @@ export interface NarrationEntry {
   domain?: string;
   /** Set when galaxy-ops marks the operation destructive (deleting or cancelling something). */
   destructive?: boolean;
+  /**
+   * The Galaxy jobs or invocations this call started, as Galaxy last reported
+   * them. While any is unfinished the entry stays `running`, even after the
+   * call itself returned.
+   */
+  galaxy?: readonly GalaxyRun[];
   status: "running" | "done" | "failed";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;
@@ -91,6 +97,19 @@ export type LifecycleEvent =
       at: number;
       /** What the harness called the finished work, when it said; matched loosely. */
       label?: string;
+    }
+  | {
+      /**
+       * A Galaxy job or workflow invocation changed state. `id` is Galaxy's id
+       * for it, as the call that started it reported. `state` is Galaxy's own
+       * word (`queued`, `running`, `ok`, `error`, …; for an invocation
+       * `scheduled`, `completed`, `failed`, `cancelled`), or `untracked` when
+       * the harness has stopped following it.
+       */
+      kind: "job-state";
+      at: number;
+      id: string;
+      state: string;
     }
   | {
       /**
@@ -146,10 +165,20 @@ export interface NarrationGroup {
   error?: string;
 }
 
+/** A Galaxy job or workflow invocation a call started, and its last known state. */
+export interface GalaxyRun {
+  kind: "job" | "invocation";
+  /** Galaxy's id for the job or invocation. */
+  id: string;
+  state: string;
+}
+
 /** Galaxy work that was started and hasn't been reported finished yet. */
 export interface GalaxyWork {
   /** The tool call that started it. */
   id: string;
+  /** Galaxy's id for the job or invocation, when the call's result named it. */
+  galaxyId?: string;
   title: string;
   since: number;
 }

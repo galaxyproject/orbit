@@ -7,8 +7,12 @@
  * so a caller can skip a redraw with a plain `===` check.
  */
 
+import { isJobSuccess, isJobTerminal } from "@galaxyproject/galaxy-ops/browser";
+
 import { classifyTool, describeToolCall, operationFor, startsGalaxyWork } from "./catalog.js";
+import { envelopeOf, startedWork } from "./results.js";
 import type {
+  GalaxyRun,
   NarrationEntry,
   NarrationEvent,
   NarrationGroup,
@@ -151,17 +155,20 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       };
     }
     case "galaxy-finished": {
-      if (state.galaxyRunning.length === 0) {
+      // A loose "something finished" report, for work no result named by id;
+      // work with a Galaxy id waits for its own job-state instead.
+      const loose = state.galaxyRunning.filter((w) => !w.galaxyId);
+      if (loose.length === 0) {
         return state;
       }
       const label = event.label?.toLowerCase();
-      const index = label
-        ? state.galaxyRunning.findIndex((w) => w.title.toLowerCase().includes(label))
-        : -1;
+      const match = label ? loose.find((w) => w.title.toLowerCase().includes(label)) : undefined;
       // An unmatched report still means something finished; the oldest work is the best guess.
-      const drop = index === -1 ? 0 : index;
-      return { ...state, galaxyRunning: state.galaxyRunning.filter((_, i) => i !== drop) };
+      const drop = match ?? loose[0];
+      return { ...state, galaxyRunning: state.galaxyRunning.filter((w) => w !== drop) };
     }
+    case "job-state":
+      return applyJobState(state, event.id, event.state, event.at);
   }
 }
 
@@ -180,19 +187,108 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
           : null;
     return now ? withNow({ ...g, entries }, now, event.at) : { ...g, entries };
   });
-  if (event.phase === "end" && !event.isError && startsGalaxyWork(event.toolName)) {
+  // A call can return without an error yet carry a failed envelope: nothing was started then.
+  const refused = event.phase === "end" && envelopeOf(event.result)?.success === false;
+  if (event.phase === "end" && !event.isError && !refused && startsGalaxyWork(event.toolName)) {
     const entry = activeGroup(next)?.entries.find((e) => e.id === event.id);
     if (entry && !next.galaxyRunning.some((w) => w.id === event.id)) {
-      next = {
-        ...next,
-        galaxyRunning: [
-          ...next.galaxyRunning,
-          { id: event.id, title: entry.title, since: event.at },
-        ],
-      };
+      const runs = startedWork(event.toolName, event.result);
+      if (runs.length === 0) {
+        // The result named no job: track the call itself until a loose report.
+        next = {
+          ...next,
+          galaxyRunning: [
+            ...next.galaxyRunning,
+            { id: event.id, title: entry.title, since: event.at },
+          ],
+        };
+      } else {
+        next = updateActive(next, (g) => ({
+          ...g,
+          entries: g.entries.map((e) =>
+            e.id === event.id ? settle({ ...e, galaxy: runs }, event.at) : e,
+          ),
+        }));
+        const pending = runs.filter((r) => !runFinished(r));
+        next = {
+          ...next,
+          galaxyRunning: [
+            ...next.galaxyRunning,
+            ...pending.map((r) => ({
+              id: event.id,
+              galaxyId: r.id,
+              title: entry.title,
+              since: event.at,
+            })),
+          ],
+        };
+      }
     }
   }
   return next;
+}
+
+/** A Galaxy job or invocation that has reached an end, successful or not. */
+function runFinished(run: GalaxyRun): boolean {
+  if (run.state === "untracked") return true;
+  return run.kind === "invocation"
+    ? ["completed", "failed", "cancelled"].includes(run.state)
+    : isJobTerminal(run.state);
+}
+
+function runFailed(run: GalaxyRun): boolean {
+  if (run.state === "untracked") return false;
+  return run.kind === "invocation"
+    ? run.state === "failed" || run.state === "cancelled"
+    : isJobTerminal(run.state) && !isJobSuccess(run.state);
+}
+
+/**
+ * An entry whose call started Galaxy work: running until every run finishes,
+ * then failed if any failed, else done. A call that itself failed stays failed.
+ */
+function settle(entry: NarrationEntry, at: number): NarrationEntry {
+  const runs = entry.galaxy ?? [];
+  if (runs.length === 0 || entry.status === "failed") return entry;
+  if (!runs.every(runFinished)) {
+    const { endedAt: _notYet, ...rest } = entry;
+    return { ...rest, status: "running" };
+  }
+  return { ...entry, status: runs.some(runFailed) ? "failed" : "done", endedAt: at };
+}
+
+function applyJobState(
+  state: NarrationState,
+  id: string,
+  galaxyState: string,
+  at: number,
+): NarrationState {
+  let touched = false;
+  const groups = state.groups.map((g) => {
+    if (!g.entries.some((e) => e.galaxy?.some((r) => r.id === id))) return g;
+    touched = true;
+    return {
+      ...g,
+      entries: g.entries.map((e) => {
+        if (!e.galaxy?.some((r) => r.id === id)) return e;
+        const galaxy = e.galaxy.map((r) => (r.id === id ? { ...r, state: galaxyState } : r));
+        return settle({ ...e, galaxy }, at);
+      }),
+    };
+  });
+  if (!touched) {
+    return state;
+  }
+  const finished =
+    runFinished({ kind: "job", id, state: galaxyState }) ||
+    ["completed", "failed", "cancelled"].includes(galaxyState);
+  return {
+    ...state,
+    groups,
+    galaxyRunning: finished
+      ? state.galaxyRunning.filter((w) => w.galaxyId !== id)
+      : state.galaxyRunning,
+  };
 }
 
 /**
