@@ -285,7 +285,7 @@ describe("advance: groups and the live status line", () => {
     expect(currentStatus(state)).toBeNull();
   });
 
-  it("does not wait on uploads, whose finish is never reported", () => {
+  it("does not wait on an upload that finished before its call returned", () => {
     const state = play([
       { kind: "group-start", at: 0 },
       { id: "u1", toolName: "galaxy_upload_local_file", phase: "start", at: 1 },
@@ -537,6 +537,12 @@ describe("startedWork: the Galaxy work a result names", () => {
     expect(startedWork("galaxy_run_tool", JSON.stringify(result))).toEqual(expected);
   });
 
+  it("reads the upload job from an upload", () => {
+    expect(
+      startedWork("upload_file_from_url", envelope({ jobs: [{ id: "j1", state: "queued" }] })),
+    ).toEqual([{ kind: "job", id: "j1", state: "queued" }]);
+  });
+
   it("reads one invocation or a batch from invoke_workflow", () => {
     expect(startedWork("invoke_workflow", envelope({ id: "i1", state: "new" }))).toEqual([
       { kind: "invocation", id: "i1", state: "new" },
@@ -547,6 +553,7 @@ describe("startedWork: the Galaxy work a result names", () => {
   it("finds nothing in a failed call, another operation, or something that isn't an envelope", () => {
     expect(startedWork("run_tool", envelope({ jobs: [{ id: "j1" }] }, false))).toEqual([]);
     expect(startedWork("get_job_details", envelope({ jobs: [{ id: "j1" }] }))).toEqual([]);
+    expect(startedWork("upload_local_file", envelope({ jobs: [{ id: "j1" }] }))).toEqual([]);
     expect(startedWork("run_tool", "not json")).toEqual([]);
     expect(startedWork("run_tool", { content: [] })).toEqual([]);
   });
@@ -744,6 +751,49 @@ describe("advance: rows follow their Galaxy jobs", () => {
     expect(state.groups[0].entries[0].status).toBe("running");
     const done = advance(state, { kind: "job-state", at: 9, id: "i1", state: "completed" });
     expect(done.groups[0].entries[0].status).toBe("done");
+  });
+
+  it("keeps an upload from a URL running until its upload job ends, and fails it if the job fails", () => {
+    const upload = (state: string): ToolEvent[] => [
+      {
+        id: "u1",
+        toolName: "upload_file_from_url",
+        phase: "start",
+        at: 1,
+        args: { url: "https://x.org/a/genome.fna.gz" },
+      },
+      {
+        id: "u1",
+        toolName: "upload_file_from_url",
+        phase: "end",
+        at: 2,
+        result: {
+          data: {
+            outputs: [{ id: "d1", hid: 48, name: "genome.fna.gz" }],
+            jobs: [{ id: "j1", state }],
+          },
+          success: true,
+        },
+      },
+    ];
+    const accepted = play([
+      { kind: "group-start", at: 0 },
+      ...upload("queued"),
+      { kind: "group-end", at: 3 },
+    ]);
+    expect(accepted.groups[0].entries[0].status).toBe("running");
+    expect(currentStatus(accepted)?.text).toBe("Galaxy is still working: Uploading genome.fna.gz");
+
+    const failed = advance(accepted, { kind: "job-state", at: 20, id: "j1", state: "error" });
+    expect(failed.groups[0].entries[0]).toMatchObject({
+      status: "failed",
+      failedTitle: "Couldn't upload genome.fna.gz",
+      detail: "The Galaxy job failed",
+    });
+    expect(currentStatus(failed)).toBeNull();
+
+    const ok = play([{ kind: "group-start", at: 0 }, ...upload("ok")]);
+    expect(ok.groups[0].entries[0].status).toBe("done");
   });
 
   it("marks a job already finished when submitted as done straight away", () => {

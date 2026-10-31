@@ -40,8 +40,8 @@ export function envelopeOf(result: unknown): GalaxyResult<unknown> | null {
 
 /**
  * The jobs and invocations a successful call started: `jobs` on a tool
- * submission (`run_tool`, `run_user_tool`), and the invocation(s) an
- * `invoke_workflow` returns. Nothing for a failed call or any other operation.
+ * submission (`run_tool`, `run_user_tool`) or an upload, and the invocation(s)
+ * an `invoke_workflow` returns. Nothing for a failed call or any other operation.
  */
 export function startedWork(toolName: string, result: unknown): StartedWork[] {
   const envelope = envelopeOf(result);
@@ -50,6 +50,8 @@ export function startedWork(toolName: string, result: unknown): StartedWork[] {
   switch (normalizeToolName(toolName).name) {
     case "run_tool":
     case "run_user_tool":
+    case "upload_file_from_url":
+    case "upload_file":
       return isPlainObject(data) && Array.isArray(data.jobs)
         ? data.jobs.flatMap((job) => workOf("job", job))
         : [];

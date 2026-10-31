@@ -173,12 +173,18 @@ export function classifyTool(toolName: string): ToolKind {
 
 /**
  * Galaxy tools whose success means Galaxy keeps working after the call
- * returns, and whose finish the harness reports. Uploads also run as Galaxy
- * jobs, but Orbit's poller never reports them finished, so counting them here
- * left "Galaxy is still working" on screen forever; they come back once job
- * state is read directly.
+ * returns: tool runs, workflow runs, and galaxy-ops' uploads, which return as
+ * soon as Galaxy accepts the upload job, so a bad URL only fails later. Orbit's
+ * own `upload_local_file` is left out: it waits for the upload to finish before
+ * it returns.
  */
-const STARTS_GALAXY_WORK = new Set(["run_tool", "run_user_tool", "invoke_workflow"]);
+const STARTS_GALAXY_WORK = new Set([
+  "run_tool",
+  "run_user_tool",
+  "invoke_workflow",
+  "upload_file_from_url",
+  "upload_file",
+]);
 
 /** Whether a successful call to this tool leaves a job running in Galaxy. */
 export function startsGalaxyWork(toolName: string): boolean {
