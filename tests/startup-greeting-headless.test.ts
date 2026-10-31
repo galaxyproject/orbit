@@ -119,7 +119,8 @@ async function boot(withUI: boolean, prompt?: string) {
       const uiContext = new Proxy({} as Record<string, unknown>, {
         get: (t, p) => (p in t ? t[p as string] : () => undefined),
       }) as unknown as ExtensionUIContext;
-      await session.bindExtensions({ uiContext });
+      // What rpc mode binds: a UI context and mode "rpc".
+      await session.bindExtensions({ uiContext, mode: "rpc" });
     } else {
       // What runPrintMode does for `--mode json`: no uiContext.
       await session.bindExtensions({ mode: "json" });

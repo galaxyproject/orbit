@@ -305,11 +305,12 @@ export function planStartupGreeting(status: ActiveGalaxyStatus, isOrbit: boolean
 }
 
 export function sendStartupGreeting(pi: ExtensionAPI, ctx: ExtensionContext): void {
-  // Print and json modes have no UI and prompt the session themselves right
-  // after session_start; a greeting turn there starts first, and their prompt
-  // is then rejected with "Agent is already processing" (#424). Nobody would
-  // read the greeting in those modes anyway.
-  if (!ctx.hasUI) return;
+  // Print and json modes prompt the session themselves right after
+  // session_start; a greeting turn there starts first, and their prompt is then
+  // rejected with "Agent is already processing" (#424). Nobody would read the
+  // greeting in those modes anyway. Gated on the mode rather than hasUI: a shell
+  // host without dialogs (the browser's, today) still wants its greeting.
+  if (ctx.mode === "print" || ctx.mode === "json") return;
   const isOrbit = capabilityProfile().ui === "desktop";
   const action = planStartupGreeting(activeGalaxyStatus(), isOrbit);
   if (action.kind === "model") {
