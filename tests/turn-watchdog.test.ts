@@ -295,11 +295,57 @@ describe("TurnWatchdog", () => {
       expect(onTimeout).toHaveBeenCalledWith("silence");
     });
 
-    it("ignores a compaction that starts after the turn ended", () => {
+    it("lets a compaction that starts after the turn ended finish quietly", () => {
       const { watchdog, onTimeout } = make();
       watchdog.promptSent();
       watchdog.observe("agent_end");
       watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      watchdog.observe("compaction_end");
+
+      // No turn is in flight, so nothing is left to time.
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("still fires when a compaction that started after the turn ended wedges", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("agent_end");
+      watchdog.observe("compaction_start");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("keeps timing a post-turn compaction across a handled command's stop()", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT);
+      watchdog.stop();
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("ignores other events during a post-turn compaction", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT);
+      watchdog.observe("extension_ui_request", "confirm");
+      watchdog.observe("message_update");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("does not time a post-turn compaction across a reset", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.observe("compaction_start");
+      watchdog.reset();
 
       vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
       expect(onTimeout).not.toHaveBeenCalled();

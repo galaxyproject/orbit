@@ -20,7 +20,8 @@
  * much longer window instead of a pause, so a compaction that truly wedges is
  * still reported rather than spinning forever. pi also compacts after
  * `agent_end`, when the user may already be typing again, so compaction is
- * tracked whether or not a turn is in flight and survives a queued prompt.
+ * tracked and timed whether or not a turn is in flight and survives a queued
+ * prompt.
  */
 export type TurnStallKind = "silence" | "compaction";
 
@@ -76,12 +77,15 @@ export class TurnWatchdog {
   /**
    * Observe a brain -> shell event by its `type`. Resets the silence window on
    * normal activity, pauses across tool/modal waits, and disarms on terminal
-   * events. No-ops when no turn is in flight.
+   * events. With no turn in flight only compaction events count.
    */
   observe(eventType: string, uiMethod?: string): void {
-    if (eventType === "compaction_start") this.compacting = true;
-    else if (eventType === "compaction_end") this.compacting = false;
-    if (!this.active) return;
+    const isCompactionEvent = eventType === "compaction_start" || eventType === "compaction_end";
+    if (isCompactionEvent) this.compacting = eventType === "compaction_start";
+    if (!this.active) {
+      if (isCompactionEvent) this.arm();
+      return;
+    }
     switch (eventType) {
       case "agent_end":
       case "error":
@@ -130,17 +134,17 @@ export class TurnWatchdog {
     }
   }
 
-  /** Disarm entirely (process stop/restart, or after firing). */
+  /** End the turn. A compaction still running stays on its own ceiling. */
   stop(): void {
-    this.clearTimer();
     this.active = false;
     this.paused = false;
+    this.arm();
   }
 
   /** The brain process is gone; no compaction it started can still be running. */
   reset(): void {
-    this.stop();
     this.compacting = false;
+    this.stop();
   }
 
   /**
@@ -157,7 +161,7 @@ export class TurnWatchdog {
 
   private arm(): void {
     this.clearTimer();
-    if (!this.active || this.paused || this.suspended) return;
+    if (!(this.active || this.compacting) || this.paused || this.suspended) return;
     const kind: TurnStallKind = this.compacting ? "compaction" : "silence";
     const timeoutMs = this.compacting ? this.config.compactionTimeoutMs : this.config.timeoutMs;
     this.timer = setTimeout(() => {

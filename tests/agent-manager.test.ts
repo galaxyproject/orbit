@@ -334,6 +334,38 @@ describe("AgentManager", () => {
       }
     });
 
+    it("cancels a compaction that wedges after the turn ended (#616)", async () => {
+      vi.useFakeTimers();
+      try {
+        const proc = makeProcess(101);
+        spawnMock.mockReturnValue(proc);
+        const { AgentManager, COMPACTION_TIMEOUT_MS } = await import("../app/src/main/agent.js");
+        const window = {
+          isDestroyed: () => false,
+          setTitle: vi.fn(),
+          webContents: { send: vi.fn() },
+        };
+        const manager = new AgentManager(window as any, "/analysis");
+        manager.start();
+
+        manager.send({ type: "prompt", message: "Summarize the run" });
+        lineHandler?.(JSON.stringify({ type: "agent_start" }));
+        lineHandler?.(JSON.stringify({ type: "agent_end", messages: [] }));
+        // pi's post-run threshold compaction, after the UI already looks idle.
+        lineHandler?.(JSON.stringify({ type: "compaction_start", reason: "threshold" }));
+
+        vi.advanceTimersByTime(COMPACTION_TIMEOUT_MS - 1);
+        expect(errorEvents(window)).toHaveLength(0);
+        vi.advanceTimersByTime(1);
+        const errors = errorEvents(window);
+        expect(errors).toHaveLength(1);
+        expect((errors[0][1] as { message?: string }).message).toMatch(/compact\w* .*stalled/i);
+        expect(proc.stdin.write).toHaveBeenCalledWith(expect.stringMatching(/"type":"abort"/));
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("drops a crashed brain's compaction when it restarts the brain (#616)", async () => {
       vi.useFakeTimers();
       try {
