@@ -583,16 +583,50 @@ describe("advance: rows follow their Galaxy jobs", () => {
     );
   });
 
-  it("lets go of a job the harness stopped tracking, without calling it failed", () => {
+  it("lets go of a job the harness stopped tracking, as untracked rather than done or failed", () => {
     const state = play([
       { kind: "group-start", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "queued" }]),
+      { kind: "job-state", at: 7, id: "j1", state: "running" },
+      { kind: "group-end", at: 8 },
+      { kind: "job-state", at: 9, id: "j1", state: "untracked" },
+    ]);
+    const [entry] = state.groups[0].entries;
+    expect(entry.status).toBe("untracked");
+    expect(entry.endedAt).toBe(9);
+    // The last state Galaxy reported is kept, so the view can say "last seen running".
+    expect(entry.galaxy).toEqual([{ kind: "job", id: "j1", state: "running", untracked: true }]);
+    expect(currentStatus(state)).toBeNull();
+  });
+
+  it("calls a row failed, not untracked, when another of its jobs failed", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [
+        { id: "j1", state: "queued" },
+        { id: "j2", state: "queued" },
+      ]),
+      { kind: "job-state", at: 9, id: "j1", state: "untracked" },
+      { kind: "job-state", at: 10, id: "j2", state: "error" },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("failed");
+  });
+
+  it("keeps a row running while another of its jobs is still going", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [
+        { id: "j1", state: "queued" },
+        { id: "j2", state: "queued" },
+      ]),
       { kind: "group-end", at: 5 },
       { kind: "job-state", at: 9, id: "j1", state: "untracked" },
     ]);
-    expect(state.groups[0].entries[0].status).toBe("done");
-    expect(currentStatus(state)).toBeNull();
+    expect(state.groups[0].entries[0].status).toBe("running");
+    expect(currentStatus(state)?.text).toBe("Galaxy is still working: Running fasterq_dump");
   });
 
   it("finishes a row when its workflow invocation completes", () => {

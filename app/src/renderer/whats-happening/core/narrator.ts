@@ -228,24 +228,32 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
   return next;
 }
 
-/** A Galaxy job or invocation that has reached an end, successful or not. */
-function runFinished(run: GalaxyRun): boolean {
-  if (run.state === "untracked") return true;
+/**
+ * A Galaxy job or invocation that has reached an end, successful or not.
+ * Whether Galaxy reported the run at an end, successful or not.
+ */
+function runEnded(run: GalaxyRun): boolean {
   return run.kind === "invocation"
     ? ["completed", "failed", "cancelled"].includes(run.state)
     : isJobTerminal(run.state);
 }
 
+/** Nothing more will be heard about the run: it ended, or the harness let go of it. */
+function runFinished(run: GalaxyRun): boolean {
+  return runEnded(run) || run.untracked === true;
+}
+
 function runFailed(run: GalaxyRun): boolean {
-  if (run.state === "untracked") return false;
+  if (!runEnded(run)) return false;
   return run.kind === "invocation"
     ? run.state === "failed" || run.state === "cancelled"
-    : isJobTerminal(run.state) && !isJobSuccess(run.state);
+    : !isJobSuccess(run.state);
 }
 
 /**
- * An entry whose call started Galaxy work: running until every run finishes,
- * then failed if any failed, else done. A call that itself failed stays failed.
+ * An entry whose call started Galaxy work: running until nothing more will be
+ * heard about any of its runs; then failed if any failed, untracked if any was
+ * let go before it ended, else done. A call that itself failed stays failed.
  */
 function settle(entry: NarrationEntry, at: number): NarrationEntry {
   const runs = entry.galaxy ?? [];
@@ -254,7 +262,12 @@ function settle(entry: NarrationEntry, at: number): NarrationEntry {
     const { endedAt: _notYet, ...rest } = entry;
     return { ...rest, status: "running" };
   }
-  return { ...entry, status: runs.some(runFailed) ? "failed" : "done", endedAt: at };
+  const status = runs.some(runFailed)
+    ? "failed"
+    : runs.some((r) => !runEnded(r))
+      ? "untracked"
+      : "done";
+  return { ...entry, status, endedAt: at };
 }
 
 function applyJobState(
@@ -271,7 +284,13 @@ function applyJobState(
       ...g,
       entries: g.entries.map((e) => {
         if (!e.galaxy?.some((r) => r.id === id)) return e;
-        const galaxy = e.galaxy.map((r) => (r.id === id ? { ...r, state: galaxyState } : r));
+        const galaxy = e.galaxy.map((r) => {
+          if (r.id !== id) return r;
+          // Letting go keeps the last state Galaxy reported, so the view can say "last seen running".
+          return galaxyState === "untracked"
+            ? { ...r, untracked: true }
+            : { ...r, state: galaxyState };
+        });
         return settle({ ...e, galaxy }, at);
       }),
     };
@@ -280,8 +299,9 @@ function applyJobState(
     return state;
   }
   const finished =
-    runFinished({ kind: "job", id, state: galaxyState }) ||
-    ["completed", "failed", "cancelled"].includes(galaxyState);
+    galaxyState === "untracked" ||
+    runEnded({ kind: "job", id, state: galaxyState }) ||
+    runEnded({ kind: "invocation", id, state: galaxyState });
   return {
     ...state,
     groups,

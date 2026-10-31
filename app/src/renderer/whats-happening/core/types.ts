@@ -66,7 +66,11 @@ export interface NarrationEntry {
    * call itself returned.
    */
   galaxy?: readonly GalaxyRun[];
-  status: "running" | "done" | "failed";
+  /**
+   * `untracked`: the call's Galaxy work reached no known end; the harness
+   * stopped following a job that was still going, so we can't say how it ended.
+   */
+  status: "running" | "done" | "failed" | "untracked";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;
   detail?: string;
@@ -170,7 +174,10 @@ export interface GalaxyRun {
   kind: "job" | "invocation";
   /** Galaxy's id for the job or invocation. */
   id: string;
+  /** Galaxy's last reported state. Kept as it was when the harness stops tracking the run. */
   state: string;
+  /** Set when the harness stopped following this run before it reached an end. */
+  untracked?: boolean;
 }
 
 /** Galaxy work that was started and hasn't been reported finished yet. */
