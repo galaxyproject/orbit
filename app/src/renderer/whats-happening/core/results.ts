@@ -11,6 +11,7 @@
 import { isPlainObject, type GalaxyResult } from "@galaxyproject/galaxy-ops/browser";
 
 import { normalizeToolName } from "./catalog.js";
+import type { GalaxyRef, GalaxyRefKind } from "./types.js";
 
 /** A Galaxy job or workflow invocation a call started, as the result reported it. */
 export interface StartedWork {
@@ -61,4 +62,93 @@ export function startedWork(toolName: string, result: unknown): StartedWork[] {
 function workOf(kind: StartedWork["kind"], value: unknown): StartedWork[] {
   if (!isPlainObject(value) || typeof value.id !== "string") return [];
   return [{ kind, id: value.id, state: typeof value.state === "string" ? value.state : "new" }];
+}
+
+/**
+ * What a successful call produced or touched, as links to Galaxy: the
+ * datasets and collections a tool run or upload made (with their history
+ * numbers and names), its jobs, the history a call created, the workflow
+ * runs it started. Nothing for a failed call or a read.
+ */
+export function producedRefs(toolName: string, result: unknown): GalaxyRef[] {
+  const envelope = envelopeOf(result);
+  if (!envelope?.success) return [];
+  const data: unknown = envelope.data;
+  switch (normalizeToolName(toolName).name) {
+    case "run_tool":
+    case "run_user_tool":
+    case "upload_file":
+    case "upload_file_from_url":
+    case "upload_local_file": {
+      if (!isPlainObject(data)) return [];
+      return [
+        ...refsOf("dataset", data.outputs),
+        ...refsOf("collection", data.output_collections),
+        ...refsOf("job", data.jobs),
+      ];
+    }
+    case "create_history":
+    case "update_history":
+      return refsOf("history", [data]);
+    case "invoke_workflow":
+      return refsOf("invocation", Array.isArray(data) ? data : [data]);
+    case "import_workflow_from_iwc":
+      return refsOf("workflow", [data]);
+    default:
+      return [];
+  }
+}
+
+function refsOf(kind: GalaxyRefKind, values: unknown): GalaxyRef[] {
+  if (!Array.isArray(values)) return [];
+  return values.flatMap((value) => {
+    if (!isPlainObject(value) || typeof value.id !== "string") return [];
+    const hid = typeof value.hid === "number" ? `#${value.hid}` : "";
+    const name = typeof value.name === "string" ? value.name : "";
+    const label = [hid, name].filter(Boolean).join(" ") || value.id;
+    return [{ kind, id: value.id, label }];
+  });
+}
+
+/** A short line for what a call produced, e.g. "2 new datasets (#41, #42)". */
+export function producedSummary(refs: readonly GalaxyRef[]): string | undefined {
+  const parts: string[] = [];
+  for (const [kind, one, many] of [
+    ["dataset", "new dataset", "new datasets"],
+    ["collection", "new collection", "new collections"],
+  ] as const) {
+    const found = refs.filter((r) => r.kind === kind);
+    if (found.length === 0) continue;
+    const hids = found.map((r) => r.label.match(/^#\d+/)?.[0]).filter(Boolean);
+    const list = hids.length === found.length ? ` (${hids.join(", ")})` : "";
+    parts.push(`${found.length} ${found.length === 1 ? one : many}${list}`);
+  }
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+/**
+ * Why a call failed, in one line, when its result says: the envelope's
+ * message, with Galaxy's own `err_msg` pulled out when it is buried in there,
+ * and the wrapper's "Error calling tool …" preamble dropped.
+ */
+export function failureReason(result: unknown): string | undefined {
+  const envelope = envelopeOf(result);
+  let text =
+    envelope && !envelope.success
+      ? envelope.message
+      : typeof result === "string" && envelope === null
+        ? result
+        : undefined;
+  if (typeof text !== "string" || !text.trim()) return undefined;
+  const galaxySaid = /"err_msg"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1];
+  if (galaxySaid) {
+    text = galaxySaid.replace(/\\"/g, '"');
+  }
+  const line = text
+    .trim()
+    .split("\n")[0]
+    .replace(/^(Error:\s*)+/i, "")
+    .replace(/^Error calling tool '[^']*':\s*/i, "")
+    .trim();
+  return line.length > 160 ? `${line.slice(0, 157)}…` : line;
 }

@@ -16,7 +16,13 @@ import {
   operationFor,
   startsGalaxyWork,
 } from "./catalog.js";
-import { envelopeOf, startedWork } from "./results.js";
+import {
+  envelopeOf,
+  failureReason,
+  producedRefs,
+  producedSummary,
+  startedWork,
+} from "./results.js";
 import type {
   GalaxyRun,
   NarrationEntry,
@@ -45,7 +51,7 @@ export function narrate(
           ...galaxyFacts(event.toolName),
           status: "running",
           title: describeToolCall(event.toolName, event.args),
-          ...doneTitleFor(event.toolName),
+          ...doneTitleFor(event.toolName, event.args),
           links: [],
           startedAt: event.at,
         },
@@ -183,8 +189,11 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
   // A tool call outside any group (shouldn't happen, but harnesses vary) opens one.
   const base = activeGroup(state) ? state : advance(state, { kind: "group-start", at: event.at });
   let next = updateActive(base, (g) => {
-    const entries = narrate(g.entries, event);
+    let entries = narrate(g.entries, event);
     if (entries === g.entries) return g;
+    if (event.phase === "end") {
+      entries = entries.map((e) => (e.id === event.id ? finishEntry(e, event) : e));
+    }
     const entry = entries.find((e) => e.id === event.id);
     const now =
       event.phase === "start"
@@ -388,7 +397,29 @@ function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destruc
   return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
 }
 
-function doneTitleFor(toolName: string): Pick<NarrationEntry, "doneTitle"> {
-  const doneTitle = describeDoneCall(toolName);
+function doneTitleFor(toolName: string, args: unknown): Pick<NarrationEntry, "doneTitle"> {
+  const doneTitle = describeDoneCall(toolName, args);
   return doneTitle ? { doneTitle } : {};
+}
+
+/**
+ * What a call's result says, put on its entry: a failure the harness didn't
+ * flag (a failed envelope) marks it failed; a failed entry gets the reason, a
+ * successful one the links to what it produced and a short line about them.
+ */
+function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
+  const refused = envelopeOf(event.result)?.success === false;
+  if (entry.status === "failed" || refused) {
+    const reason = failureReason(event.result);
+    return {
+      ...entry,
+      status: "failed",
+      endedAt: entry.endedAt ?? event.at,
+      ...(reason ? { detail: reason } : {}),
+    };
+  }
+  const links = producedRefs(event.toolName, event.result);
+  if (links.length === 0) return entry;
+  const detail = producedSummary(links);
+  return { ...entry, links, ...(detail ? { detail } : {}) };
 }

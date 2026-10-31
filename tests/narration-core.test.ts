@@ -6,7 +6,12 @@ import {
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
-import { startedWork } from "../app/src/renderer/whats-happening/core/results.js";
+import {
+  failureReason,
+  producedRefs,
+  producedSummary,
+  startedWork,
+} from "../app/src/renderer/whats-happening/core/results.js";
 import {
   advance,
   currentStatus,
@@ -50,6 +55,7 @@ describe("narrate", () => {
         domain: "tools",
         status: "running",
         title: "Running __BUILD_LIST__",
+        doneTitle: "Ran __BUILD_LIST__",
         links: [],
         startedAt: 1000,
       },
@@ -174,7 +180,8 @@ describe("describeToolCall", () => {
   });
 
   it("titles a change without words of its own by the first sentence of its summary", () => {
-    expect(describeToolCall("create_history", {})).toBe("Create a new history with the given name");
+    expect(describeToolCall("delete_user_tool", {})).not.toMatch(/^Working with Galaxy/);
+    expect(describeToolCall("create_page", {})).toBe("Create a markdown page");
   });
 
   it("falls back to a generic title for tools galaxy-ops does not know", () => {
@@ -724,19 +731,169 @@ describe("done titles", () => {
     expect(describeDoneCall("galaxy_search_ena")).toBe("Searched public data");
   });
 
-  it("has no separate done title for changes or bookkeeping", () => {
-    expect(describeDoneCall("run_tool")).toBeUndefined();
+  it("has no separate done title for bookkeeping, or a change without words of its own", () => {
     expect(describeDoneCall("edit")).toBeUndefined();
+    expect(describeDoneCall("create_page")).toBeUndefined();
   });
 
-  it("puts the done title on a read's entry, and none on a change's", () => {
+  it("puts the done title on reads and on changes with words of their own", () => {
     const entries = fold([
       { id: "h", toolName: "get_history_contents", phase: "start", at: 1 },
       { id: "r", toolName: "run_tool", phase: "start", at: 2, args: { tool_id: "cat1" } },
     ]);
     expect(entries.map((e) => [e.title, e.doneTitle])).toEqual([
       ["Looking at your history", "Looked at your history"],
-      ["Running cat1", undefined],
+      ["Running cat1", "Ran cat1"],
     ]);
+  });
+});
+
+describe("step 7: titles from a call's arguments", () => {
+  it("names the accession a tool run works on, and says it in the past once done", () => {
+    const args = {
+      tool_id: "toolshed.g2.bx.psu.edu/repos/iuc/sra_tools/fastq_dump/2.11.0+galaxy0",
+      inputs: { "input|input_select": "accession_number", "input|accession": "SRR22376031" },
+    };
+    expect(describeToolCall("run_tool", args)).toBe("Running fastq_dump on SRR22376031");
+    expect(describeDoneCall("run_tool", args)).toBe("Ran fastq_dump on SRR22376031");
+  });
+
+  it("names the history being created, and copes without a name", () => {
+    expect(describeToolCall("create_history", { history_name: "RNA-seq" })).toBe(
+      'Creating history "RNA-seq"',
+    );
+    expect(describeDoneCall("create_history", { history_name: "RNA-seq" })).toBe(
+      'Created history "RNA-seq"',
+    );
+    expect(describeToolCall("create_history", {})).toBe("Creating a history");
+  });
+
+  it("names the file being uploaded, from its name or the end of its URL", () => {
+    expect(
+      describeToolCall("upload_file_from_url", {
+        url: "https://zenodo.org/x/reads_1.fastq.gz?download=1",
+      }),
+    ).toBe("Uploading reads_1.fastq.gz");
+    expect(describeDoneCall("upload_file_from_url", { url: "u", file_name: "counts.tsv" })).toBe(
+      "Uploaded counts.tsv",
+    );
+  });
+});
+
+describe("step 7: what a result produced", () => {
+  const ok = (data: unknown) => ({ data, success: true, message: "" });
+
+  it("links the datasets, collections and jobs a tool run made", () => {
+    const refs = producedRefs(
+      "run_tool",
+      ok({
+        outputs: [
+          { id: "d1", hid: 41, name: "forward" },
+          { id: "d2", hid: 42, name: "reverse" },
+        ],
+        output_collections: [{ id: "c1", hid: 43, name: "pairs" }],
+        jobs: [{ id: "j1" }],
+      }),
+    );
+    expect(refs).toEqual([
+      { kind: "dataset", id: "d1", label: "#41 forward" },
+      { kind: "dataset", id: "d2", label: "#42 reverse" },
+      { kind: "collection", id: "c1", label: "#43 pairs" },
+      { kind: "job", id: "j1", label: "j1" },
+    ]);
+    expect(producedSummary(refs)).toBe("2 new datasets (#41, #42), 1 new collection (#43)");
+  });
+
+  it("links the history a call created, and the workflow runs it started", () => {
+    expect(producedRefs("create_history", ok({ id: "h1", name: "RNA-seq" }))).toEqual([
+      { kind: "history", id: "h1", label: "RNA-seq" },
+    ]);
+    expect(producedRefs("invoke_workflow", ok([{ id: "i1" }, { id: "i2" }]))).toHaveLength(2);
+  });
+
+  it("produces nothing for a failed call or a read", () => {
+    expect(producedRefs("run_tool", { data: { outputs: [{ id: "d1" }] }, success: false })).toEqual(
+      [],
+    );
+    expect(producedRefs("get_history_contents", ok([{ id: "d1" }]))).toEqual([]);
+    expect(producedSummary([{ kind: "job", id: "j1", label: "j1" }])).toBeUndefined();
+  });
+});
+
+describe("step 7: why a call failed", () => {
+  it("pulls Galaxy's own err_msg out of a long failure message", () => {
+    const message =
+      "Error: Error calling tool 'run_tool': Run tool failed: Unexpected HTTP status code: 400: " +
+      '{"err_msg": "Parameter \'0|input\' has an invalid key structure.", "err_code": 400008}. Context: …';
+    expect(failureReason({ data: null, success: false, message })).toBe(
+      "Parameter '0|input' has an invalid key structure.",
+    );
+  });
+
+  it("uses the first line of a plain failure, without the wrapper's preamble, kept short", () => {
+    expect(
+      failureReason({
+        success: false,
+        data: null,
+        message: "Error: Error calling tool 'x': History not found\nmore",
+      }),
+    ).toBe("History not found");
+    expect(failureReason("x".repeat(400))?.length).toBe(158);
+  });
+
+  it("has no reason for a success", () => {
+    expect(failureReason({ data: {}, success: true, message: "ok" })).toBeUndefined();
+  });
+});
+
+describe("step 7: finished entries carry what happened", () => {
+  it("puts links and a produced line on a successful tool run", () => {
+    const entries = play([
+      { kind: "group-start", at: 0 },
+      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        result: { data: { outputs: [{ id: "d1", hid: 7, name: "out" }], jobs: [] }, success: true },
+      },
+    ]).groups[0].entries;
+    expect(entries[0]).toMatchObject({
+      status: "done",
+      detail: "1 new dataset (#7)",
+      links: [{ kind: "dataset", id: "d1", label: "#7 out" }],
+    });
+  });
+
+  it("marks a call failed when its envelope says so, even if the harness didn't, with the reason", () => {
+    const entries = play([
+      { kind: "group-start", at: 0 },
+      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        result: { data: null, success: false, message: "Tool cat1 not found" },
+      },
+    ]).groups[0].entries;
+    expect(entries[0]).toMatchObject({ status: "failed", detail: "Tool cat1 not found" });
+  });
+
+  it("gives a reason for a call the harness flagged as an error", () => {
+    const entries = play([
+      { kind: "group-start", at: 0 },
+      { id: "t", toolName: "run_tool", phase: "start", at: 1 },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        isError: true,
+        result: "Galaxy timed out",
+      },
+    ]).groups[0].entries;
+    expect(entries[0]).toMatchObject({ status: "failed", detail: "Galaxy timed out" });
   });
 });

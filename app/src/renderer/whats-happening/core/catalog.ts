@@ -43,10 +43,48 @@ export function normalizeToolName(toolName: string): NormalizedToolName {
   return { name: toolName, galaxy: OPERATIONS.has(toolName) || toolName in KIND_OVERRIDES };
 }
 
-type Describer = (args: Record<string, unknown>) => string;
+/** How a change is said while it runs, and once it's done, from the call's arguments. */
+type Describer = (args: Record<string, unknown>) => { now: string; done: string };
 
 const DESCRIBERS: Record<string, Describer> = {
-  run_tool: (args) => `Running ${galaxyToolLabel(args.tool_id)}`,
+  run_tool: (args) => {
+    const what = `${galaxyToolLabel(args.tool_id)}${onAccession(args.inputs)}`;
+    return { now: `Running ${what}`, done: `Ran ${what}` };
+  },
+  create_history: (args) => {
+    const name = quoted(args.history_name);
+    return name
+      ? { now: `Creating history ${name}`, done: `Created history ${name}` }
+      : { now: "Creating a history", done: "Created a history" };
+  },
+  update_history: (args) =>
+    typeof args.name === "string" && args.name
+      ? {
+          now: `Renaming your history to ${quoted(args.name)}`,
+          done: `Renamed your history to ${quoted(args.name)}`,
+        }
+      : { now: "Updating your history", done: "Updated your history" },
+  invoke_workflow: () => ({ now: "Starting a workflow run", done: "Ran a workflow" }),
+  cancel_workflow_invocation: () => ({
+    now: "Cancelling a workflow run",
+    done: "Cancelled a workflow run",
+  }),
+  import_workflow_from_iwc: () => ({
+    now: "Adding a workflow to your Galaxy",
+    done: "Added a workflow to your Galaxy",
+  }),
+  upload_file_from_url: (args) => {
+    const file = fileLabel(args.file_name ?? args.url);
+    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
+  },
+  upload_file: (args) => {
+    const file = fileLabel(args.path ?? args.file_path);
+    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
+  },
+  upload_local_file: (args) => {
+    const file = fileLabel(args.path ?? args.file_path);
+    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
+  },
 };
 
 /**
@@ -169,7 +207,7 @@ function wordingFor(toolName: string): Wording | undefined {
 export function describeToolCall(toolName: string, args: unknown): string {
   const { name, galaxy } = normalizeToolName(toolName);
   const describer = DESCRIBERS[name];
-  if (describer) return describer(isRecord(args) ? args : {});
+  if (describer) return describer(isRecord(args) ? args : {}).now;
   const wording = wordingFor(toolName);
   if (wording) return wording[0];
   const op = OPERATIONS.get(name);
@@ -178,10 +216,12 @@ export function describeToolCall(toolName: string, args: unknown): string {
 }
 
 /**
- * How a finished read or check is told afterwards ("Looked at your history"),
- * or undefined when the call's title reads the same either way.
+ * How a finished call is told afterwards ("Looked at your history", "Created
+ * history "RNA-seq""), or undefined when its title reads the same either way.
  */
-export function describeDoneCall(toolName: string): string | undefined {
+export function describeDoneCall(toolName: string, args?: unknown): string | undefined {
+  const describer = DESCRIBERS[normalizeToolName(toolName).name];
+  if (describer) return describer(isRecord(args) ? args : {}).done;
   return wordingFor(toolName)?.[1];
 }
 
@@ -200,6 +240,31 @@ function galaxyToolLabel(toolId: unknown): string {
   if (typeof toolId !== "string" || toolId === "") return "a Galaxy tool";
   const parts = toolId.split("/");
   return parts.length >= 2 ? parts[parts.length - 2] : toolId;
+}
+
+/** A sequencing-run accession among a tool's inputs (SRR / ERR / DRR), as " on SRR123…". */
+function onAccession(inputs: unknown): string {
+  if (!isRecord(inputs)) return "";
+  const found = Object.values(inputs).find(
+    (v): v is string => typeof v === "string" && /^[SED]RR\d+$/.test(v.trim()),
+  );
+  return found ? ` on ${found.trim()}` : "";
+}
+
+function quoted(value: unknown): string {
+  return typeof value === "string" && value.trim() ? `"${value.trim()}"` : "";
+}
+
+/** The last path or URL segment, or "a file". */
+function fileLabel(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) return "a file";
+  const last = value
+    .trim()
+    .replace(/[?#].*$/, "")
+    .split(/[\\/]/)
+    .filter(Boolean)
+    .pop();
+  return last ?? "a file";
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
