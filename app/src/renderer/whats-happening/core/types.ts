@@ -84,6 +84,8 @@ export interface NarrationEntry {
   failedTitle?: string;
   /** A short line under the title: what the call produced, or why it failed. */
   detail?: string;
+  /** A failed call's whole message, exactly as Galaxy or the harness gave it, e.g. for a "show the full error" view. */
+  failureMessage?: string;
   links: GalaxyRef[];
   startedAt: number;
   endedAt?: number;

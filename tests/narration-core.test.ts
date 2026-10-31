@@ -253,6 +253,15 @@ describe("advance: groups and the live status line", () => {
     expect(stopped.groups[0]).toMatchObject({ status: "stopped", error: "model unavailable" });
   });
 
+  it("keeps a stop reason whole, as the harness gave it", () => {
+    const long = `ContextWindowExceededError: ${"x".repeat(300)}\n{"detail": "…"}`;
+    const stopped = play([
+      { kind: "group-start", at: 0 },
+      { kind: "group-end", at: 3, error: long },
+    ]);
+    expect(stopped.groups[0].error).toBe(long);
+  });
+
   it("keeps saying Galaxy is working after the group ends, until it reports finished", () => {
     const afterTurn = play([
       { kind: "group-start", at: 0 },
@@ -969,15 +978,15 @@ describe("step 7: why a call failed", () => {
     );
   });
 
-  it("uses the first line of a plain failure, without the wrapper's preamble, kept short", () => {
+  it("keeps a plain failure whole, without the wrapper's preamble", () => {
     expect(
       failureReason({
         success: false,
         data: null,
         message: "Error: Error calling tool 'x': History not found\nmore",
       }),
-    ).toBe("History not found");
-    expect(failureReason("x".repeat(400))?.length).toBe(158);
+    ).toBe("History not found\nmore");
+    expect(failureReason("x".repeat(400))?.length).toBe(400);
   });
 
   it("has no reason for a success", () => {
@@ -1018,6 +1027,26 @@ describe("step 7: finished entries carry what happened", () => {
       },
     ]).groups[0].entries;
     expect(entries[0]).toMatchObject({ status: "failed", detail: "Tool cat1 not found" });
+  });
+
+  it("keeps a failed call's whole message beside its short reason", () => {
+    const message =
+      'Error calling tool \'run_tool\': 400: {"err_msg": "Parameter \'input1\' is required", "err_code": 400008}\ntraceback …';
+    const entries = play([
+      { kind: "group-start", at: 0 },
+      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        result: { data: null, success: false, message },
+      },
+    ]).groups[0].entries;
+    expect(entries[0]).toMatchObject({
+      detail: "Parameter 'input1' is required",
+      failureMessage: message,
+    });
   });
 
   it("gives a reason for a call the harness flagged as an error", () => {

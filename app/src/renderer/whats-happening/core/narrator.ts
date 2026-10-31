@@ -21,6 +21,7 @@ import {
 import { EMPTY_NAMES, learnNames } from "./names.js";
 import {
   envelopeOf,
+  failureMessage,
   failureReason,
   producedRefs,
   producedSummary,
@@ -457,11 +458,13 @@ function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
   const refused = envelopeOf(event.result)?.success === false;
   if (entry.status === "failed" || refused) {
     const reason = failureReason(event.result);
+    const message = failureMessage(event.result);
     return {
       ...entry,
       status: "failed",
       endedAt: entry.endedAt ?? event.at,
       ...(reason ? { detail: reason } : {}),
+      ...(message ? { failureMessage: message } : {}),
     };
   }
   const produced = producedRefs(event.toolName, event.result);

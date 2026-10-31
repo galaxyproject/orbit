@@ -129,28 +129,34 @@ export function producedSummary(refs: readonly GalaxyRef[]): string | undefined 
 }
 
 /**
- * Why a call failed, in one line, when its result says: the envelope's
- * message, with Galaxy's own `err_msg` pulled out when it is buried in there,
- * and the wrapper's "Error calling tool …" preamble dropped.
+ * Why a call failed, when its result says: the envelope's message, with
+ * Galaxy's own `err_msg` pulled out when it is buried in there, and the
+ * wrapper's "Error calling tool …" preamble dropped.
  */
 export function failureReason(result: unknown): string | undefined {
+  let text = failureMessage(result);
+  if (text === undefined) return undefined;
+  const galaxySaid = /"err_msg"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1];
+  if (galaxySaid) {
+    text = galaxySaid.replace(/\\"/g, '"');
+  }
+  return text
+    .replace(/^\s*(Error:\s*)+/i, "")
+    .replace(/^Error calling tool '[^']*':\s*/i, "")
+    .trim();
+}
+
+/**
+ * A failed call's whole message, as the result gave it (the envelope's
+ * message, or the harness's error text), for a view that shows it in full.
+ */
+export function failureMessage(result: unknown): string | undefined {
   const envelope = envelopeOf(result);
-  let text =
+  const text =
     envelope && !envelope.success
       ? envelope.message
       : typeof result === "string" && envelope === null
         ? result
         : undefined;
-  if (typeof text !== "string" || !text.trim()) return undefined;
-  const galaxySaid = /"err_msg"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(text)?.[1];
-  if (galaxySaid) {
-    text = galaxySaid.replace(/\\"/g, '"');
-  }
-  const line = text
-    .trim()
-    .split("\n")[0]
-    .replace(/^(Error:\s*)+/i, "")
-    .replace(/^Error calling tool '[^']*':\s*/i, "")
-    .trim();
-  return line.length > 160 ? `${line.slice(0, 157)}…` : line;
+  return typeof text === "string" && text.trim() ? text : undefined;
 }
