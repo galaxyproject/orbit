@@ -384,6 +384,38 @@ describe("TurnWatchdog", () => {
       expect(onTimeout).not.toHaveBeenCalled();
     });
 
+    it("keeps watching a turn on the normal window after a crashed brain's compaction is forgotten", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      watchdog.forgetCompaction();
+
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
+
+    it("watches the turn again when the brain crashes during a dialog mid-compaction", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.observe("extension_ui_request", "confirm");
+      watchdog.forgetCompaction();
+
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
+
+    it("does not arm when forgetting a compaction outside a turn", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.observe("compaction_start");
+      watchdog.forgetCompaction();
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
     it("forgets a compaction when the brain process is reset", () => {
       const { watchdog, onTimeout } = make();
       watchdog.promptSent();

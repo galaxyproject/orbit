@@ -334,6 +334,39 @@ describe("AgentManager", () => {
       }
     });
 
+    it("drops a crashed brain's compaction when it restarts the brain (#616)", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = makeProcess(101);
+        const second = makeProcess(202);
+        spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+        const { AgentManager, TURN_SILENCE_TIMEOUT_MS } = await import("../app/src/main/agent.js");
+        const window = {
+          isDestroyed: () => false,
+          setTitle: vi.fn(),
+          webContents: { send: vi.fn() },
+        };
+        const manager = new AgentManager(window as any, "/analysis");
+        manager.start();
+
+        manager.send({ type: "prompt", message: "Keep going" });
+        lineHandler?.(JSON.stringify({ type: "compaction_start", reason: "threshold" }));
+        // The brain dies mid-compaction; no compaction_end will ever arrive.
+        first.emit("exit", 1, null);
+        vi.advanceTimersByTime(200);
+        expect(spawnMock).toHaveBeenCalledTimes(2);
+        const errorsBefore = errorEvents(window).length;
+
+        manager.send({ type: "prompt", message: "Try again" });
+        vi.advanceTimersByTime(TURN_SILENCE_TIMEOUT_MS + 1);
+        const errors = errorEvents(window).slice(errorsBefore);
+        expect(errors).toHaveLength(1);
+        expect((errors[0][1] as { message?: string }).message).toMatch(/stopped responding/i);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it.each([
       ["a handled command", { success: true, data: { disposition: "handled" } }],
       ["a rejected prompt", { success: false, error: "Preflight failed" }],

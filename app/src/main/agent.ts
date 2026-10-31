@@ -481,6 +481,7 @@ export class AgentManager {
         return;
       }
       this.process = null;
+      this.watchdog.forgetCompaction();
 
       // Clean exit (intentional stop, or normal termination).
       if (code === 0 || code === null) {

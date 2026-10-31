@@ -143,6 +143,18 @@ export class TurnWatchdog {
     this.compacting = false;
   }
 
+  /**
+   * The brain exited and is being restarted. Its compaction_end will never come,
+   * but an in-flight turn still needs watching on the normal window.
+   */
+  forgetCompaction(): void {
+    if (!this.compacting) return;
+    this.compacting = false;
+    // Whatever dialog the dead brain was waiting on is gone with it.
+    this.paused = false;
+    this.arm();
+  }
+
   private arm(): void {
     this.clearTimer();
     if (!this.active || this.paused || this.suspended) return;
