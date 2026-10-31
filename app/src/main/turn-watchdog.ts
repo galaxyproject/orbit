@@ -14,12 +14,23 @@
  * whole tool-execution window and while a UI modal is open, since those are
  * legitimate long/indefinite waits rather than a stalled provider call. System
  * sleep is excluded too; waking starts a fresh silence window for recovery.
+ *
+ * Compaction is one long summarization call that emits nothing until it ends,
+ * and on a local model it can run for most of an hour (#616). It gets its own,
+ * much longer window instead of a pause, so a compaction that truly wedges is
+ * still reported rather than spinning forever. pi also compacts after
+ * `agent_end`, when the user may already be typing again, so compaction is
+ * tracked whether or not a turn is in flight and survives a queued prompt.
  */
+export type TurnStallKind = "silence" | "compaction";
+
 export interface TurnWatchdogConfig {
   /** How long the brain may stay silent mid-turn before we treat it as stalled. */
   timeoutMs: number;
+  /** How long a compaction may run between `compaction_start` and `compaction_end`. */
+  compactionTimeoutMs: number;
   /** Invoked when a turn stalls. The watchdog is already disarmed when this runs. */
-  onTimeout: () => void;
+  onTimeout: (kind: TurnStallKind) => void;
 }
 
 export class TurnWatchdog {
@@ -29,6 +40,10 @@ export class TurnWatchdog {
   // The brain is legitimately blocked (running a tool, or awaiting a modal),
   // so silence is expected and must not be mistaken for a stall.
   private paused = false;
+  // Between compaction_start and compaction_end; selects the longer window.
+  // Like `suspended`, it outlives promptSent() and stop(): only the brain
+  // (compaction_end), a firing, or reset() on process exit clears it.
+  private compacting = false;
   // Power state is independent of tool/modal waits and survives stop(). Brain
   // events can still arrive after the OS announces suspend; none may rearm us.
   private suspended = false;
@@ -63,7 +78,9 @@ export class TurnWatchdog {
    * normal activity, pauses across tool/modal waits, and disarms on terminal
    * events. No-ops when no turn is in flight.
    */
-  observe(eventType: string): void {
+  observe(eventType: string, uiMethod?: string): void {
+    if (eventType === "compaction_start") this.compacting = true;
+    else if (eventType === "compaction_end") this.compacting = false;
     if (!this.active) return;
     switch (eventType) {
       case "agent_end":
@@ -71,8 +88,15 @@ export class TurnWatchdog {
         // Turn resolved (success or surfaced error) -- nothing to guard.
         this.stop();
         return;
-      case "tool_execution_start":
       case "extension_ui_request":
+        // Status, widget and notify updates land mid-compaction (a tool's status
+        // is cleared a few seconds after it ends); only a dialog that waits on
+        // the user may lift the compaction ceiling.
+        if (this.compacting && !isDialogMethod(uiMethod)) return;
+        this.paused = true;
+        this.clearTimer();
+        return;
+      case "tool_execution_start":
         // Tool may run long; a modal may wait on the user indefinitely. Pause
         // until the brain produces output again.
         this.paused = true;
@@ -84,6 +108,16 @@ export class TurnWatchdog {
         return;
       case "tool_execution_end":
         // Back to waiting on the model.
+        this.paused = false;
+        this.arm();
+        return;
+      case "compaction_start":
+        this.paused = false;
+        this.arm();
+        return;
+      case "compaction_end":
+        // Fires for success, failure and abort alike; each hands control back
+        // to the turn, which is waiting on the model again.
         this.paused = false;
         this.arm();
         return;
@@ -103,15 +137,24 @@ export class TurnWatchdog {
     this.paused = false;
   }
 
+  /** The brain process is gone; no compaction it started can still be running. */
+  reset(): void {
+    this.stop();
+    this.compacting = false;
+  }
+
   private arm(): void {
     this.clearTimer();
     if (!this.active || this.paused || this.suspended) return;
+    const kind: TurnStallKind = this.compacting ? "compaction" : "silence";
+    const timeoutMs = this.compacting ? this.config.compactionTimeoutMs : this.config.timeoutMs;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.active = false;
       this.paused = false;
-      this.config.onTimeout();
-    }, this.config.timeoutMs);
+      this.compacting = false;
+      this.config.onTimeout(kind);
+    }, timeoutMs);
   }
 
   private clearTimer(): void {
@@ -120,4 +163,10 @@ export class TurnWatchdog {
       this.timer = null;
     }
   }
+}
+
+const DIALOG_METHODS = new Set(["select", "confirm", "input", "editor"]);
+
+function isDialogMethod(method: string | undefined): boolean {
+  return method !== undefined && DIALOG_METHODS.has(method);
 }

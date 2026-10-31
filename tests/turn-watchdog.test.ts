@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TurnWatchdog } from "../app/src/main/turn-watchdog.js";
 
 const TIMEOUT = 1000;
+const COMPACTION_TIMEOUT = TIMEOUT * 30;
 
 describe("TurnWatchdog", () => {
   beforeEach(() => {
@@ -13,7 +14,11 @@ describe("TurnWatchdog", () => {
 
   function make() {
     const onTimeout = vi.fn();
-    const watchdog = new TurnWatchdog({ timeoutMs: TIMEOUT, onTimeout });
+    const watchdog = new TurnWatchdog({
+      timeoutMs: TIMEOUT,
+      compactionTimeoutMs: COMPACTION_TIMEOUT,
+      onTimeout,
+    });
     return { watchdog, onTimeout };
   }
 
@@ -228,5 +233,166 @@ describe("TurnWatchdog", () => {
     expect(onTimeout).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(TIMEOUT * 10);
     expect(onTimeout).toHaveBeenCalledTimes(1);
+  });
+
+  describe("compaction (#616)", () => {
+    it("does not kill a compaction that outlives the silence window", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+
+      // One long summarization call with no events, well past the normal window.
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      // Compaction finished; back to waiting on the model under the normal window.
+      watchdog.observe("compaction_end");
+      vi.advanceTimersByTime(TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
+
+    it("still fires, naming compaction, when a compaction never ends", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+
+      // A late compaction_end from the abandoned turn must not rearm anything.
+      watchdog.observe("compaction_end");
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns to the normal window when an aborted compaction ends", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+
+      // The user pressed Stop: pi aborts the summarization and reports it.
+      watchdog.observe("compaction_end");
+      watchdog.observe("agent_end");
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("treats silence after an aborted compaction as an ordinary stall", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      // Stopped mid-compaction, but no agent_end follows.
+      watchdog.observe("compaction_end");
+
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
+
+    it("ignores a compaction that starts after the turn ended", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("agent_end");
+      watchdog.observe("compaction_start");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("keeps the compaction ceiling across sleep and wake", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.suspend();
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+      watchdog.resume();
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("keeps the compaction ceiling when a follow-up prompt is queued mid-compaction", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+
+      // The user types while waiting; pi queues it as a follow-up.
+      watchdog.promptSent();
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("applies the ceiling to a prompt sent during a compaction that began after agent_end", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("agent_end");
+      // pi's post-run threshold compaction: the turn looks finished to the UI.
+      watchdog.observe("compaction_start");
+      watchdog.promptSent();
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      watchdog.observe("compaction_end");
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
+
+    it("keeps the compaction ceiling across a handled command's stop()", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.observe("compaction_start");
+      watchdog.promptSent();
+      watchdog.stop();
+
+      watchdog.promptSent();
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("does not let status or notify updates lift the compaction ceiling", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT);
+      watchdog.observe("extension_ui_request", "setStatus");
+      watchdog.observe("extension_ui_request", "notify");
+      watchdog.observe("extension_ui_request");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("pauses for a dialog opened during compaction", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.observe("extension_ui_request", "confirm");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 3);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("forgets a compaction when the brain process is reset", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.reset();
+
+      watchdog.promptSent();
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenCalledWith("silence");
+    });
   });
 });

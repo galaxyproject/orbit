@@ -17,7 +17,7 @@ import {
   appendStderr,
 } from "../../../shared/brain-exit.js";
 import { noLocalShellSpawnExtras } from "./local-shell.js";
-import { TurnWatchdog } from "./turn-watchdog.js";
+import { TurnWatchdog, type TurnStallKind } from "./turn-watchdog.js";
 import { promptStartsNoTurn } from "../../../shared/handled-prompt.js";
 import { formatWindowTitle } from "./window-title.js";
 import { isOAuthOnlyProvider } from "./oauth-handler.js";
@@ -30,6 +30,17 @@ import { DESKTOP_SHELL_KIND, readEnv, writeEnv } from "../../../shared/orbit-env
  * a fresh window so the provider connection has time to recover.
  */
 export const TURN_SILENCE_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a single compaction may run before Orbit gives up on it (#616). The
+ * brain is silent for the whole summarization call, and on a local model that
+ * means re-reading a context of up to ~200K tokens at 180-460 tok/s (up to ~20
+ * minutes) and then decoding a summary of up to ~16K tokens at ~17 tok/s (another
+ * ~15). Reported local compactions ran about an hour once the re-prefill that
+ * follows is counted; 90 minutes covers the in-window ~35 with room for slower
+ * hardware and thinking models, while still freeing a truly wedged session.
+ */
+export const COMPACTION_TIMEOUT_MS = 90 * 60_000;
 
 const PROVIDER_ENV_MAP: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
@@ -209,7 +220,8 @@ export class AgentManager {
     this.cwd = cwd;
     this.watchdog = new TurnWatchdog({
       timeoutMs: TURN_SILENCE_TIMEOUT_MS,
-      onTimeout: () => this.handleTurnStalled(),
+      compactionTimeoutMs: COMPACTION_TIMEOUT_MS,
+      onTimeout: (kind) => this.handleTurnStalled(kind),
     });
     this.refreshWindowTitle();
   }
@@ -676,7 +688,7 @@ export class AgentManager {
     if (status === "stopped" || status === "error") {
       this.turnActive = false;
       // The process is gone; never let a pending watchdog fire against it.
-      this.watchdog.stop();
+      this.watchdog.reset();
     }
     log("status:", status, message || "");
     if (!this.window.isDestroyed()) {
@@ -691,15 +703,24 @@ export class AgentManager {
    * turn done, and best-effort tell the brain to abort so its streaming state
    * clears and the next prompt isn't queued behind a dead turn.
    */
-  private handleTurnStalled(): void {
-    log("turn stalled: no brain activity for", TURN_SILENCE_TIMEOUT_MS, "ms");
+  private handleTurnStalled(kind: TurnStallKind): void {
+    const compaction = kind === "compaction";
+    log(
+      compaction
+        ? "compaction stalled: no compaction_end for"
+        : "turn stalled: no brain activity for",
+      compaction ? COMPACTION_TIMEOUT_MS : TURN_SILENCE_TIMEOUT_MS,
+      "ms",
+    );
     this.turnActive = false;
     if (!this.window.isDestroyed()) {
       this.window.webContents.send("agent:event", {
         type: "error",
-        message:
-          "The assistant stopped responding for two minutes, so Orbit cancelled " +
-          "the request. Please try again.",
+        message: compaction
+          ? `Compacting the conversation stalled: it had not finished after ${COMPACTION_TIMEOUT_MS / 60_000} minutes, ` +
+            "so Orbit cancelled it. Please try again."
+          : "The assistant stopped responding for two minutes, so Orbit cancelled " +
+            "the request. Please try again.",
       });
     }
     // Best-effort: unstick pi's streaming state so the next prompt runs. If the
@@ -725,7 +746,7 @@ export class AgentManager {
 
     // Any line from the brain is a sign of life: reset/pause/disarm the stall
     // watchdog before we act on (or early-return from) this event.
-    this.watchdog.observe(type);
+    this.watchdog.observe(type, data.method as string | undefined);
 
     // send() armed the watchdog for this prompt, but a handled command or a
     // rejected prompt means no turn follows -- left armed, it would report a
