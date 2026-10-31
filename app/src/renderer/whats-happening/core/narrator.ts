@@ -16,6 +16,7 @@ import {
   operationFor,
   startsGalaxyWork,
 } from "./catalog.js";
+import { EMPTY_NAMES, learnNames } from "./names.js";
 import {
   envelopeOf,
   failureReason,
@@ -25,6 +26,7 @@ import {
 } from "./results.js";
 import type {
   GalaxyRun,
+  NameMemory,
   NarrationEntry,
   NarrationEvent,
   NarrationGroup,
@@ -37,6 +39,7 @@ import type {
 export function narrate(
   entries: readonly NarrationEntry[],
   event: ToolEvent,
+  names: NameMemory = EMPTY_NAMES,
 ): readonly NarrationEntry[] {
   switch (event.phase) {
     case "start": {
@@ -50,8 +53,8 @@ export function narrate(
           kind: classifyTool(event.toolName),
           ...galaxyFacts(event.toolName),
           status: "running",
-          title: describeToolCall(event.toolName, event.args),
-          ...doneTitleFor(event.toolName, event.args),
+          title: describeToolCall(event.toolName, event.args, names),
+          ...doneTitleFor(event.toolName, event.args, names),
           links: [],
           startedAt: event.at,
         },
@@ -75,7 +78,7 @@ export function narrate(
   }
 }
 
-export const EMPTY_STATE: NarrationState = { groups: [], galaxyRunning: [] };
+export const EMPTY_STATE: NarrationState = { groups: [], galaxyRunning: [], names: EMPTY_NAMES };
 
 const MODEL_STATUS = {
   thinking: "Thinking…",
@@ -189,7 +192,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
   // A tool call outside any group (shouldn't happen, but harnesses vary) opens one.
   const base = activeGroup(state) ? state : advance(state, { kind: "group-start", at: event.at });
   let next = updateActive(base, (g) => {
-    let entries = narrate(g.entries, event);
+    let entries = narrate(g.entries, event, state.names);
     if (entries === g.entries) return g;
     if (event.phase === "end") {
       entries = entries.map((e) => (e.id === event.id ? finishEntry(e, event) : e));
@@ -240,6 +243,10 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
         };
       }
     }
+  }
+  if (event.phase === "end" && !event.isError) {
+    const names = learnNames(next.names, event.toolName, event.result);
+    if (names !== next.names) next = { ...next, names };
   }
   return next;
 }
@@ -397,8 +404,12 @@ function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destruc
   return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
 }
 
-function doneTitleFor(toolName: string, args: unknown): Pick<NarrationEntry, "doneTitle"> {
-  const doneTitle = describeDoneCall(toolName, args);
+function doneTitleFor(
+  toolName: string,
+  args: unknown,
+  names: NameMemory,
+): Pick<NarrationEntry, "doneTitle"> {
+  const doneTitle = describeDoneCall(toolName, args, names);
   return doneTitle ? { doneTitle } : {};
 }
 

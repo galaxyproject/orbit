@@ -16,7 +16,7 @@ import {
   type OperationDomain,
 } from "@galaxyproject/galaxy-ops/browser";
 
-import type { ToolKind } from "./types.js";
+import type { NameMemory, NamedItem, ToolKind } from "./types.js";
 
 const GALAXY_PREFIXES = ["mcp__galaxy__", "galaxy_"];
 
@@ -43,12 +43,23 @@ export function normalizeToolName(toolName: string): NormalizedToolName {
   return { name: toolName, galaxy: OPERATIONS.has(toolName) || toolName in KIND_OVERRIDES };
 }
 
-/** How a change is said while it runs, and once it's done, from the call's arguments. */
-type Describer = (args: Record<string, unknown>) => { now: string; done: string };
+/**
+ * How a change is said while it runs, and once it's done, from the call's
+ * arguments and the names learned so far.
+ */
+type Describer = (
+  args: Record<string, unknown>,
+  names: NameMemory,
+) => { now: string; done: string };
+
+const NO_NAMES: NameMemory = { tools: {}, datasets: {}, collections: {}, histories: {} };
 
 const DESCRIBERS: Record<string, Describer> = {
-  run_tool: (args) => {
-    const what = `${galaxyToolLabel(args.tool_id)}${onAccession(args.inputs)}`;
+  run_tool: (args, names) => {
+    const tool =
+      (typeof args.tool_id === "string" && names.tools[args.tool_id]) ||
+      galaxyToolLabel(args.tool_id);
+    const what = `${tool}${onAccession(args.inputs) || onInputs(args.inputs, names)}`;
     return { now: `Running ${what}`, done: `Ran ${what}` };
   },
   create_history: (args) => {
@@ -204,10 +215,14 @@ function wordingFor(toolName: string): Wording | undefined {
  * for a few changes, plain wording by domain for reads and checks, else the
  * first sentence of the galaxy-ops operation's summary.
  */
-export function describeToolCall(toolName: string, args: unknown): string {
+export function describeToolCall(
+  toolName: string,
+  args: unknown,
+  names: NameMemory = NO_NAMES,
+): string {
   const { name, galaxy } = normalizeToolName(toolName);
   const describer = DESCRIBERS[name];
-  if (describer) return describer(isRecord(args) ? args : {}).now;
+  if (describer) return describer(isRecord(args) ? args : {}, names).now;
   const wording = wordingFor(toolName);
   if (wording) return wording[0];
   const op = OPERATIONS.get(name);
@@ -219,9 +234,13 @@ export function describeToolCall(toolName: string, args: unknown): string {
  * How a finished call is told afterwards ("Looked at your history", "Created
  * history "RNA-seq""), or undefined when its title reads the same either way.
  */
-export function describeDoneCall(toolName: string, args?: unknown): string | undefined {
+export function describeDoneCall(
+  toolName: string,
+  args?: unknown,
+  names: NameMemory = NO_NAMES,
+): string | undefined {
   const describer = DESCRIBERS[normalizeToolName(toolName).name];
-  if (describer) return describer(isRecord(args) ? args : {}).done;
+  if (describer) return describer(isRecord(args) ? args : {}, names).done;
   return wordingFor(toolName)?.[1];
 }
 
@@ -249,6 +268,39 @@ function onAccession(inputs: unknown): string {
     (v): v is string => typeof v === "string" && /^[SED]RR\d+$/.test(v.trim()),
   );
   return found ? ` on ${found.trim()}` : "";
+}
+
+/**
+ * The datasets and collections a tool's inputs point at, said by name when
+ * known: ` on "reads.fastq" (#4)` for one, ` on 3 datasets` for several, and
+ * nothing when the one input's name hasn't been seen.
+ */
+function onInputs(inputs: unknown, names: NameMemory): string {
+  const refs: { src: string; id: string }[] = [];
+  const walk = (value: unknown, depth: number) => {
+    if (depth > 4) return;
+    if (Array.isArray(value)) {
+      for (const item of value) walk(item, depth + 1);
+    } else if (isRecord(value)) {
+      if ((value.src === "hda" || value.src === "hdca") && typeof value.id === "string") {
+        refs.push({ src: value.src, id: value.id });
+        return;
+      }
+      for (const child of Object.values(value)) walk(child, depth + 1);
+    }
+  };
+  walk(inputs, 0);
+  const unique = refs.filter((r, i) => refs.findIndex((o) => o.id === r.id) === i);
+  if (unique.length === 0) return "";
+  if (unique.length > 1) {
+    const collections = unique.every((r) => r.src === "hdca");
+    return ` on ${unique.length} ${collections ? "collections" : "datasets"}`;
+  }
+  const [only] = unique;
+  const item: NamedItem | undefined =
+    only.src === "hda" ? names.datasets[only.id] : names.collections[only.id];
+  if (!item) return "";
+  return ` on "${item.name}"${item.hid === undefined ? "" : ` (#${item.hid})`}`;
 }
 
 function quoted(value: unknown): string {

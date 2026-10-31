@@ -192,7 +192,22 @@ export interface GalaxyWork {
   since: number;
 }
 
+/** A dataset or collection's name, and its number in the history when known. */
+export interface NamedItem {
+  name: string;
+  hid?: number;
+}
+
+/** Names of Galaxy things learned from results so far, by Galaxy id (tools by tool id). */
+export interface NameMemory {
+  tools: Readonly<Record<string, string>>;
+  datasets: Readonly<Record<string, NamedItem>>;
+  collections: Readonly<Record<string, NamedItem>>;
+  histories: Readonly<Record<string, string>>;
+}
+
 export interface NarrationState {
   groups: readonly NarrationGroup[];
   galaxyRunning: readonly GalaxyWork[];
+  names: NameMemory;
 }

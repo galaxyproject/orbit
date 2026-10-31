@@ -6,6 +6,7 @@ import {
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
+import { EMPTY_NAMES, learnNames } from "../app/src/renderer/whats-happening/core/names.js";
 import {
   failureReason,
   producedRefs,
@@ -42,7 +43,7 @@ const end = (id: string, at = 2000, isError = false): ToolEvent => ({
 });
 
 function fold(events: ToolEvent[]): readonly NarrationEntry[] {
-  return events.reduce<readonly NarrationEntry[]>(narrate, []);
+  return events.reduce<readonly NarrationEntry[]>((entries, event) => narrate(entries, event), []);
 }
 
 describe("narrate", () => {
@@ -895,5 +896,134 @@ describe("step 7: finished entries carry what happened", () => {
       },
     ]).groups[0].entries;
     expect(entries[0]).toMatchObject({ status: "failed", detail: "Galaxy timed out" });
+  });
+});
+
+describe("step 8: name memory", () => {
+  const ok = (data: unknown) => ({ data, success: true, message: "" });
+  const end = (id: string, toolName: string, result: unknown, at = 2): NarrationEvent => ({
+    id,
+    toolName,
+    phase: "end",
+    at,
+    result,
+  });
+  const start = (id: string, toolName: string, args: unknown, at = 1): NarrationEvent => ({
+    id,
+    toolName,
+    phase: "start",
+    at,
+    args,
+  });
+
+  it("learns tool names from tool lookups and searches", () => {
+    let names = learnNames(
+      EMPTY_NAMES,
+      "get_tool_details",
+      ok({ id: "random_lines1", name: "Select random lines" }),
+    );
+    names = learnNames(
+      names,
+      "search_tools_by_name",
+      ok([{ id: "cat1", name: "Concatenate datasets" }]),
+    );
+    expect(names.tools).toEqual({
+      random_lines1: "Select random lines",
+      cat1: "Concatenate datasets",
+    });
+  });
+
+  it("learns datasets and collections from history contents, and histories from history lookups", () => {
+    let names = learnNames(
+      EMPTY_NAMES,
+      "get_history_contents",
+      ok([
+        { id: "d4", hid: 4, name: "synthetic_counts.tsv", history_content_type: "dataset" },
+        { id: "c9", hid: 9, name: "pairs", history_content_type: "dataset_collection" },
+      ]),
+    );
+    names = learnNames(names, "get_histories", ok([{ id: "h1", name: "RNA-seq" }]));
+    expect(names.datasets).toEqual({ d4: { name: "synthetic_counts.tsv", hid: 4 } });
+    expect(names.collections).toEqual({ c9: { name: "pairs", hid: 9 } });
+    expect(names.histories).toEqual({ h1: "RNA-seq" });
+  });
+
+  it("learns a dataset from its details, and new outputs from a tool run", () => {
+    let names = learnNames(
+      EMPTY_NAMES,
+      "get_dataset_details",
+      ok({
+        dataset: { id: "d4", hid: 4, name: "counts", model_class: "HistoryDatasetAssociation" },
+      }),
+    );
+    names = learnNames(
+      names,
+      "run_tool",
+      ok({
+        outputs: [{ id: "d7", hid: 7, name: "picked", history_content_type: "dataset" }],
+        jobs: [],
+      }),
+    );
+    expect(Object.keys(names.datasets)).toEqual(["d4", "d7"]);
+  });
+
+  it("learns nothing from a failure, and keeps the same memory when nothing is new", () => {
+    expect(learnNames(EMPTY_NAMES, "get_tool_details", { data: null, success: false })).toBe(
+      EMPTY_NAMES,
+    );
+    const names = learnNames(EMPTY_NAMES, "get_tool_details", ok({ id: "x", name: "X" }));
+    expect(learnNames(names, "get_tool_details", ok({ id: "x", name: "X" }))).toBe(names);
+  });
+
+  it("titles a later tool run with the tool's name and its input's name and number", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      start("a", "get_tool_details", { tool_id: "random_lines1" }),
+      end("a", "get_tool_details", ok({ id: "random_lines1", name: "Select random lines" })),
+      start("b", "get_history_contents", { history_id: "h1" }),
+      end(
+        "b",
+        "get_history_contents",
+        ok([{ id: "d4", hid: 4, name: "synthetic_counts.tsv", history_content_type: "dataset" }]),
+      ),
+      start("c", "run_tool", {
+        tool_id: "random_lines1",
+        inputs: { input: { src: "hda", id: "d4" } },
+      }),
+    ]);
+    const run = state.groups[0].entries.find((e) => e.id === "c");
+    expect(run?.title).toBe('Running Select random lines on "synthetic_counts.tsv" (#4)');
+    expect(run?.doneTitle).toBe('Ran Select random lines on "synthetic_counts.tsv" (#4)');
+  });
+
+  it("says how many inputs when there are several, and nothing about an input it can't name", () => {
+    const names = learnNames(
+      EMPTY_NAMES,
+      "get_history_contents",
+      ok([{ id: "d4", hid: 4, name: "a", history_content_type: "dataset" }]),
+    );
+    const several = {
+      tool_id: "cat1",
+      inputs: { input1: { src: "hda", id: "d4" }, queries_0: { input2: { src: "hda", id: "d5" } } },
+    };
+    expect(describeToolCall("run_tool", several, names)).toBe("Running cat1 on 2 datasets");
+    expect(
+      describeToolCall(
+        "run_tool",
+        { tool_id: "cat1", inputs: { input1: { src: "hda", id: "zz" } } },
+        names,
+      ),
+    ).toBe("Running cat1");
+  });
+
+  it("prefers an accession among the inputs over dataset names", () => {
+    const names = learnNames(
+      EMPTY_NAMES,
+      "get_tool_details",
+      ok({ id: "fastq_dump", name: "Faster Download" }),
+    );
+    expect(
+      describeToolCall("run_tool", { tool_id: "fastq_dump", inputs: { acc: "SRR1" } }, names),
+    ).toBe("Running Faster Download on SRR1");
   });
 });
