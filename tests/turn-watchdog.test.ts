@@ -325,9 +325,35 @@ describe("TurnWatchdog", () => {
       vi.advanceTimersByTime(TIMEOUT);
       watchdog.stop();
 
+      // Measured from compaction_start, not restarted by the stop.
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("does not count sleep against the ceiling when the OS never delivers resume", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.suspend();
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 2);
+
+      watchdog.promptSent();
       vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
       expect(onTimeout).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("does not let streaming events extend the compaction ceiling", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT / 2);
+      watchdog.observe("message_update");
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT / 2);
       expect(onTimeout).toHaveBeenCalledWith("compaction");
     });
 
@@ -373,7 +399,7 @@ describe("TurnWatchdog", () => {
 
       // The user types while waiting; pi queues it as a follow-up.
       watchdog.promptSent();
-      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - TIMEOUT * 5 - 1);
       expect(onTimeout).not.toHaveBeenCalled();
       vi.advanceTimersByTime(1);
       expect(onTimeout).toHaveBeenCalledWith("compaction");

@@ -28,9 +28,15 @@ export type TurnStallKind = "silence" | "compaction";
 export interface TurnWatchdogConfig {
   /** How long the brain may stay silent mid-turn before we treat it as stalled. */
   timeoutMs: number;
-  /** How long a compaction may run between `compaction_start` and `compaction_end`. */
+  /**
+   * How long a compaction may run between `compaction_start` and `compaction_end`,
+   * counted from its start (system sleep excepted), whatever else arrives meanwhile.
+   */
   compactionTimeoutMs: number;
-  /** Invoked when a turn stalls. The watchdog is already disarmed when this runs. */
+  /**
+   * Invoked when a turn or a compaction stalls; a compaction can stall after its
+   * turn has ended. The watchdog is already disarmed when this runs.
+   */
   onTimeout: (kind: TurnStallKind) => void;
 }
 
@@ -43,8 +49,11 @@ export class TurnWatchdog {
   private paused = false;
   // Between compaction_start and compaction_end; selects the longer window.
   // Like `suspended`, it outlives promptSent() and stop(): only the brain
-  // (compaction_end), a firing, or reset() on process exit clears it.
+  // (compaction_end), a firing, or a brain exit (reset / forgetCompaction)
+  // clears it.
   private compacting = false;
+  // A fixed ceiling, so prompts typed at a wedged compaction can't postpone it.
+  private compactionStartedAt = 0;
   // Power state is independent of tool/modal waits and survives stop(). Brain
   // events can still arrive after the OS announces suspend; none may rearm us.
   private suspended = false;
@@ -55,6 +64,7 @@ export class TurnWatchdog {
   promptSent(): void {
     // A fresh user prompt means the machine is awake. Clearing here keeps a
     // dropped powerMonitor `resume` from disabling the watchdog for good.
+    if (this.suspended) this.restartCompactionClock();
     this.suspended = false;
     this.active = true;
     this.paused = false;
@@ -71,6 +81,7 @@ export class TurnWatchdog {
   resume(): void {
     if (!this.suspended) return;
     this.suspended = false;
+    this.restartCompactionClock();
     this.arm();
   }
 
@@ -82,6 +93,7 @@ export class TurnWatchdog {
   observe(eventType: string, uiMethod?: string): void {
     const isCompactionEvent = eventType === "compaction_start" || eventType === "compaction_end";
     if (isCompactionEvent) this.compacting = eventType === "compaction_start";
+    if (eventType === "compaction_start") this.compactionStartedAt = Date.now();
     if (!this.active) {
       if (isCompactionEvent) this.arm();
       return;
@@ -159,11 +171,18 @@ export class TurnWatchdog {
     this.arm();
   }
 
+  // Sleep is excluded from the compaction ceiling as it is from the silence window.
+  private restartCompactionClock(): void {
+    if (this.compacting) this.compactionStartedAt = Date.now();
+  }
+
   private arm(): void {
     this.clearTimer();
     if (!(this.active || this.compacting) || this.paused || this.suspended) return;
     const kind: TurnStallKind = this.compacting ? "compaction" : "silence";
-    const timeoutMs = this.compacting ? this.config.compactionTimeoutMs : this.config.timeoutMs;
+    const timeoutMs = this.compacting
+      ? Math.max(0, this.config.compactionTimeoutMs - (Date.now() - this.compactionStartedAt))
+      : this.config.timeoutMs;
     this.timer = setTimeout(() => {
       this.timer = null;
       this.active = false;
