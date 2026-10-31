@@ -73,6 +73,8 @@ export interface NarrationEntry {
   status: "running" | "done" | "failed" | "untracked";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;
+  /** How the call is told once it has finished, when that reads differently ("Looked at your history"). */
+  doneTitle?: string;
   detail?: string;
   links: GalaxyRef[];
   startedAt: number;

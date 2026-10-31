@@ -2,6 +2,7 @@ import { allOperations } from "@galaxyproject/galaxy-ops/browser";
 import { describe, expect, it } from "vitest";
 import {
   classifyTool,
+  describeDoneCall,
   describeToolCall,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
@@ -138,12 +139,42 @@ describe("describeToolCall", () => {
     expect(describeToolCall("galaxy_run_tool", undefined)).toBe("Running a Galaxy tool");
   });
 
-  it("titles other galaxy-ops operations by the first sentence of their summary", () => {
-    expect(describeToolCall("get_history_contents", {})).toBe(
-      "List the datasets and collections in a history, one page at a time",
-    );
-    // Code marks in a summary are dropped.
-    expect(describeToolCall("get_dataset_details", {})).not.toContain("`");
+  it("words reads and checks plainly, by galaxy-ops domain", () => {
+    expect(describeToolCall("get_history_contents", {})).toBe("Looking at your history");
+    expect(describeToolCall("get_histories", {})).toBe("Looking at your history");
+    expect(describeToolCall("get_dataset_details", {})).toBe("Checking a dataset");
+    expect(describeToolCall("get_collection_details", {})).toBe("Checking a collection");
+    expect(describeToolCall("search_tools_by_name", {})).toBe("Finding the right Galaxy tool");
+    expect(describeToolCall("recommend_iwc_workflows", {})).toBe("Looking for a workflow");
+    expect(describeToolCall("get_job_details", {})).toBe("Checking on a job");
+    expect(describeToolCall("get_invocations", {})).toBe("Checking on a workflow run");
+    expect(describeToolCall("get_user", {})).toBe("Connecting to Galaxy");
+    expect(describeToolCall("get_page", {})).toBe("Reading your Galaxy page");
+  });
+
+  it("words Galaxy reads outside galaxy-ops' registry by name", () => {
+    expect(describeToolCall("galaxy_search_ena", {})).toBe("Searching public data");
+    expect(describeToolCall("mcp__galaxy__get_assemblies", {})).toBe("Searching public data");
+    expect(describeToolCall("list_jobs", {})).toBe("Checking on your jobs");
+    expect(describeToolCall("get_job_logs", {})).toBe("Reading a job's log");
+  });
+
+  it("gives every galaxy-ops read or check plain wording, never its raw summary", () => {
+    for (const op of allOperations) {
+      const kind = classifyTool(op.name);
+      if (kind !== "look" && kind !== "wait") continue;
+      expect([op.name, describeToolCall(op.name, {})]).not.toEqual([
+        op.name,
+        op.summary
+          .split(/(?<=\.)\s/)[0]
+          .replace(/`/g, "")
+          .replace(/\.$/, ""),
+      ]);
+    }
+  });
+
+  it("titles a change without words of its own by the first sentence of its summary", () => {
+    expect(describeToolCall("create_history", {})).toBe("Create a new history with the given name");
   });
 
   it("falls back to a generic title for tools galaxy-ops does not know", () => {
@@ -683,5 +714,29 @@ describe("advance: rows follow their Galaxy jobs", () => {
     ]);
     expect(advance(state, { kind: "job-state", at: 9, id: "zzz", state: "ok" })).toBe(state);
     expect(advance(state, { kind: "galaxy-finished", at: 9, label: "fasterq_dump" })).toBe(state);
+  });
+});
+
+describe("done titles", () => {
+  it("tells a finished read or check in the past tense", () => {
+    expect(describeDoneCall("get_history_contents")).toBe("Looked at your history");
+    expect(describeDoneCall("get_job_details")).toBe("Checked on a job");
+    expect(describeDoneCall("galaxy_search_ena")).toBe("Searched public data");
+  });
+
+  it("has no separate done title for changes or bookkeeping", () => {
+    expect(describeDoneCall("run_tool")).toBeUndefined();
+    expect(describeDoneCall("edit")).toBeUndefined();
+  });
+
+  it("puts the done title on a read's entry, and none on a change's", () => {
+    const entries = fold([
+      { id: "h", toolName: "get_history_contents", phase: "start", at: 1 },
+      { id: "r", toolName: "run_tool", phase: "start", at: 2, args: { tool_id: "cat1" } },
+    ]);
+    expect(entries.map((e) => [e.title, e.doneTitle])).toEqual([
+      ["Looking at your history", "Looked at your history"],
+      ["Running cat1", undefined],
+    ]);
   });
 });

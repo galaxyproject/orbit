@@ -10,7 +10,11 @@
  * the bare wire name before lookup.
  */
 
-import { allOperations, type AnyOperation } from "@galaxyproject/galaxy-ops/browser";
+import {
+  allOperations,
+  type AnyOperation,
+  type OperationDomain,
+} from "@galaxyproject/galaxy-ops/browser";
 
 import type { ToolKind } from "./types.js";
 
@@ -118,18 +122,67 @@ export function startsGalaxyWork(toolName: string): boolean {
   return STARTS_GALAXY_WORK.has(normalizeToolName(toolName).name);
 }
 
+/** How a read or a check is said while it runs, and once it's done. */
+type Wording = readonly [now: string, done: string];
+
 /**
- * Title for a tool call, from its harness name and arguments. Without a
- * describer of our own, a galaxy-ops operation is titled by the first sentence
- * of its summary.
+ * Plain wording for reads and checks, by the galaxy-ops domain of the
+ * operation: what the user is told, not what the operation is called.
+ */
+const DOMAIN_WORDING: Record<OperationDomain, Wording> = {
+  connection: ["Connecting to Galaxy", "Connected to Galaxy"],
+  histories: ["Looking at your history", "Looked at your history"],
+  datasets: ["Checking a dataset", "Checked a dataset"],
+  collections: ["Checking a collection", "Checked a collection"],
+  jobs: ["Checking on a job", "Checked on a job"],
+  tools: ["Finding the right Galaxy tool", "Looked up a Galaxy tool"],
+  userTools: ["Finding the right Galaxy tool", "Looked up a Galaxy tool"],
+  workflows: ["Looking for a workflow", "Looked for a workflow"],
+  iwc: ["Looking for a workflow", "Looked for a workflow"],
+  invocations: ["Checking on a workflow run", "Checked on a workflow run"],
+  pages: ["Reading your Galaxy page", "Read your Galaxy page"],
+};
+
+/** Wording for Galaxy tools outside galaxy-ops' registry, by name. */
+const NAME_WORDING: [RegExp, Wording][] = [
+  [/^(list_jobs|invocation_check)/, ["Checking on your jobs", "Checked on your jobs"]],
+  [/^get_job_logs$/, ["Reading a job's log", "Read a job's log"]],
+  [/ena|organism|assembl/, ["Searching public data", "Searched public data"]],
+];
+
+/** The plain wording for a read or a check, if this call is one we have words for. */
+function wordingFor(toolName: string): Wording | undefined {
+  const kind = classifyTool(toolName);
+  if (kind !== "look" && kind !== "wait") return undefined;
+  const { name, galaxy } = normalizeToolName(toolName);
+  const op = OPERATIONS.get(name);
+  if (op) return DOMAIN_WORDING[op.domain];
+  if (!galaxy) return undefined;
+  return NAME_WORDING.find(([pattern]) => pattern.test(name))?.[1];
+}
+
+/**
+ * Title for a tool call, from its harness name and arguments: our own words
+ * for a few changes, plain wording by domain for reads and checks, else the
+ * first sentence of the galaxy-ops operation's summary.
  */
 export function describeToolCall(toolName: string, args: unknown): string {
   const { name, galaxy } = normalizeToolName(toolName);
   const describer = DESCRIBERS[name];
   if (describer) return describer(isRecord(args) ? args : {});
+  const wording = wordingFor(toolName);
+  if (wording) return wording[0];
   const op = OPERATIONS.get(name);
   if (op) return firstSentence(op.summary);
   return galaxy ? `Working with Galaxy: ${name}` : `Using ${name}`;
+}
+
+/**
+ * How a finished read or check is told afterwards ("Looked at your history"),
+ * or undefined when the call's title reads the same either way.
+ */
+export function describeDoneCall(toolName: string): string | undefined {
+  return wordingFor(toolName)?.[1];
 }
 
 /** The opening sentence of an operation's summary, without code marks or the closing period. */

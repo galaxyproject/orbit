@@ -9,7 +9,13 @@
 
 import { isJobSuccess, isJobTerminal } from "@galaxyproject/galaxy-ops/browser";
 
-import { classifyTool, describeToolCall, operationFor, startsGalaxyWork } from "./catalog.js";
+import {
+  classifyTool,
+  describeDoneCall,
+  describeToolCall,
+  operationFor,
+  startsGalaxyWork,
+} from "./catalog.js";
 import { envelopeOf, startedWork } from "./results.js";
 import type {
   GalaxyRun,
@@ -39,6 +45,7 @@ export function narrate(
           ...galaxyFacts(event.toolName),
           status: "running",
           title: describeToolCall(event.toolName, event.args),
+          ...doneTitleFor(event.toolName),
           links: [],
           startedAt: event.at,
         },
@@ -379,4 +386,9 @@ function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destruc
   const op = operationFor(toolName);
   if (!op) return {};
   return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
+}
+
+function doneTitleFor(toolName: string): Pick<NarrationEntry, "doneTitle"> {
+  const doneTitle = describeDoneCall(toolName);
+  return doneTitle ? { doneTitle } : {};
 }
