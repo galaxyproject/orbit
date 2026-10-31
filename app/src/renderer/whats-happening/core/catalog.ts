@@ -46,57 +46,71 @@ export function normalizeToolName(toolName: string): NormalizedToolName {
 }
 
 /**
- * How a change is said while it runs, and once it's done, from the call's
- * arguments and the names learned so far.
+ * How a change is said while it runs, once it's done, and if it failed, from
+ * the call's arguments and the names learned so far.
  */
 type Describer = (
   args: Record<string, unknown>,
   names: NameMemory | undefined,
-) => { now: string; done: string };
+) => { now: string; done: string; failed: string };
 
 const DESCRIBERS: Record<string, Describer> = {
   run_tool: (args, names) => {
     const tool =
       (typeof args.tool_id === "string" && names?.tools[args.tool_id]) ||
       galaxyToolLabel(args.tool_id);
-    const what = `${tool}${onAccession(args.inputs) || onInputs(args.inputs, names)}`;
-    return { now: `Running ${what}`, done: `Ran ${what}` };
+    const on = onAccession(args.inputs) || onInputs(args.inputs, names);
+    return { now: `Running ${tool}${on}`, done: `Ran ${tool}${on}`, failed: `${tool} failed${on}` };
   },
   create_history: (args) => {
     const name = quoted(args.history_name);
     return name
-      ? { now: `Creating history ${name}`, done: `Created history ${name}` }
-      : { now: "Creating a history", done: "Created a history" };
+      ? {
+          now: `Creating history ${name}`,
+          done: `Created history ${name}`,
+          failed: `Couldn't create history ${name}`,
+        }
+      : {
+          now: "Creating a history",
+          done: "Created a history",
+          failed: "Couldn't create a history",
+        };
   },
   update_history: (args) =>
     typeof args.name === "string" && args.name
       ? {
           now: `Renaming your history to ${quoted(args.name)}`,
           done: `Renamed your history to ${quoted(args.name)}`,
+          failed: `Couldn't rename your history to ${quoted(args.name)}`,
         }
-      : { now: "Updating your history", done: "Updated your history" },
-  invoke_workflow: () => ({ now: "Starting a workflow run", done: "Ran a workflow" }),
+      : {
+          now: "Updating your history",
+          done: "Updated your history",
+          failed: "Couldn't update your history",
+        },
+  invoke_workflow: () => ({
+    now: "Starting a workflow run",
+    done: "Ran a workflow",
+    failed: "The workflow run failed",
+  }),
   cancel_workflow_invocation: () => ({
     now: "Cancelling a workflow run",
     done: "Cancelled a workflow run",
+    failed: "Couldn't cancel a workflow run",
   }),
   import_workflow_from_iwc: () => ({
     now: "Adding a workflow to your Galaxy",
     done: "Added a workflow to your Galaxy",
+    failed: "Couldn't add a workflow to your Galaxy",
   }),
-  upload_file_from_url: (args) => {
-    const file = fileLabel(args.file_name ?? args.url);
-    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
-  },
-  upload_file: (args) => {
-    const file = fileLabel(args.path ?? args.file_path);
-    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
-  },
-  upload_local_file: (args) => {
-    const file = fileLabel(args.path ?? args.file_path);
-    return { now: `Uploading ${file}`, done: `Uploaded ${file}` };
-  },
+  upload_file_from_url: (args) => uploading(fileLabel(args.file_name ?? args.url)),
+  upload_file: (args) => uploading(fileLabel(args.path ?? args.file_path)),
+  upload_local_file: (args) => uploading(fileLabel(args.path ?? args.file_path)),
 };
+
+function uploading(file: string): ReturnType<Describer> {
+  return { now: `Uploading ${file}`, done: `Uploaded ${file}`, failed: `Couldn't upload ${file}` };
+}
 
 /**
  * Where what a call means to the user differs from what galaxy-ops says about
@@ -238,6 +252,20 @@ export function describeDoneCall(
   const describer = DESCRIBERS[normalizeToolName(toolName).name];
   if (describer) return describer(isPlainObject(args) ? args : {}, names).done;
   return wordingFor(toolName)?.[1];
+}
+
+/**
+ * How a change that failed is told ("RNA STAR failed on 3 datasets",
+ * "Couldn't upload counts.tsv"), or undefined when we have no words of our own
+ * for it and its title stands.
+ */
+export function describeFailedCall(
+  toolName: string,
+  args?: unknown,
+  names?: NameMemory,
+): string | undefined {
+  const describer = DESCRIBERS[normalizeToolName(toolName).name];
+  return describer?.(isPlainObject(args) ? args : {}, names).failed;
 }
 
 /** The opening sentence of an operation's summary, without code marks or the closing period. */

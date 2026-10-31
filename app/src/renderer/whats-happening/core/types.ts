@@ -80,6 +80,9 @@ export interface NarrationEntry {
   title: string;
   /** How the call is told once it has finished, when that reads differently ("Looked at your history"). */
   doneTitle?: string;
+  /** How the call is told if it failed ("RNA STAR failed on 3 datasets"), when that reads differently. */
+  failedTitle?: string;
+  /** A short line under the title: what the call produced, or why it failed. */
   detail?: string;
   links: GalaxyRef[];
   startedAt: number;

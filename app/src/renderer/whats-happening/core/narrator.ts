@@ -12,6 +12,7 @@ import { isJobSuccess, isJobTerminal, isPlainObject } from "@galaxyproject/galax
 import {
   classifyTool,
   describeDoneCall,
+  describeFailedCall,
   describeToolCall,
   inputRefs,
   operationFor,
@@ -55,7 +56,7 @@ export function narrate(
           ...galaxyFacts(event.toolName),
           status: "running",
           title: describeToolCall(event.toolName, event.args, names),
-          ...doneTitleFor(event.toolName, event.args, names),
+          ...outcomeTitlesFor(event.toolName, event.args, names),
           links: isPlainObject(event.args) ? inputRefs(event.args.inputs, names) : [],
           startedAt: event.at,
         },
@@ -286,12 +287,44 @@ function settle(entry: NarrationEntry, at: number): NarrationEntry {
     const { endedAt: _notYet, ...rest } = entry;
     return { ...rest, status: "running" };
   }
-  const status = runs.some(runFailed)
-    ? "failed"
-    : runs.some((r) => !runEnded(r))
-      ? "untracked"
-      : "done";
+  if (runs.some(runFailed)) {
+    return { ...entry, status: "failed", detail: runsFailedLine(runs), endedAt: at };
+  }
+  const status = runs.some((r) => !runEnded(r)) ? "untracked" : "done";
   return { ...entry, status, endedAt: at };
+}
+
+/** Galaxy's states for a job or invocation that was stopped rather than failing on its own. */
+const CANCELLED_STATES = new Set(["deleted", "deleting", "deleted_new", "cancelled", "cancelling"]);
+
+/**
+ * Why a call's Galaxy work failed, from the runs' states: "The Galaxy job
+ * failed", "2 of 3 Galaxy jobs failed", "The workflow run was cancelled".
+ */
+function runsFailedLine(runs: readonly GalaxyRun[]): string {
+  const parts: string[] = [];
+  for (const [kind, one, many] of [
+    ["job", "Galaxy job", "Galaxy jobs"],
+    ["invocation", "workflow run", "workflow runs"],
+  ] as const) {
+    const all = runs.filter((r) => r.kind === kind);
+    const failed = all.filter(runFailed);
+    if (failed.length === 0) continue;
+    const plural = failed.length > 1;
+    const verb = failed.every((r) => CANCELLED_STATES.has(r.state))
+      ? plural
+        ? "were cancelled"
+        : "was cancelled"
+      : "failed";
+    const who =
+      all.length === 1
+        ? `The ${one}`
+        : failed.length === all.length
+          ? `All ${all.length} ${many}`
+          : `${failed.length} of ${all.length} ${many}`;
+    parts.push(`${who} ${verb}`);
+  }
+  return parts.join("; ");
 }
 
 function applyJobState(
@@ -405,13 +438,14 @@ function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destruc
   return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
 }
 
-function doneTitleFor(
+function outcomeTitlesFor(
   toolName: string,
   args: unknown,
   names: NameMemory,
-): Pick<NarrationEntry, "doneTitle"> {
+): Pick<NarrationEntry, "doneTitle" | "failedTitle"> {
   const doneTitle = describeDoneCall(toolName, args, names);
-  return doneTitle ? { doneTitle } : {};
+  const failedTitle = describeFailedCall(toolName, args, names);
+  return { ...(doneTitle ? { doneTitle } : {}), ...(failedTitle ? { failedTitle } : {}) };
 }
 
 /**

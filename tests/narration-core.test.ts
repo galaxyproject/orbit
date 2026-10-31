@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyTool,
   describeDoneCall,
+  describeFailedCall,
   describeToolCall,
   inputRefs,
   normalizeToolName,
@@ -58,6 +59,7 @@ describe("narrate", () => {
         status: "running",
         title: "Running __BUILD_LIST__",
         doneTitle: "Ran __BUILD_LIST__",
+        failedTitle: "__BUILD_LIST__ failed",
         links: [],
         startedAt: 1000,
       },
@@ -593,7 +595,64 @@ describe("advance: rows follow their Galaxy jobs", () => {
       submitted("t1", [{ id: "j1", state: "queued" }]),
       { kind: "job-state", at: 30, id: "j1", state: "error" },
     ]);
-    expect(state.groups[0].entries[0].status).toBe("failed");
+    expect(state.groups[0].entries[0]).toMatchObject({
+      status: "failed",
+      failedTitle: "fasterq_dump failed",
+      detail: "The Galaxy job failed",
+    });
+  });
+
+  it("says how many of a call's jobs failed, and when they were cancelled instead", () => {
+    const three = [
+      { kind: "group-start", at: 0 },
+      started("t1"),
+      submitted("t1", [
+        { id: "j1", state: "queued" },
+        { id: "j2", state: "queued" },
+        { id: "j3", state: "queued" },
+      ]),
+    ] as const;
+    const some = play([
+      ...three,
+      { kind: "job-state", at: 9, id: "j1", state: "ok" },
+      { kind: "job-state", at: 10, id: "j2", state: "error" },
+      { kind: "job-state", at: 11, id: "j3", state: "error" },
+    ]);
+    expect(some.groups[0].entries[0].detail).toBe("2 of 3 Galaxy jobs failed");
+    const all = play([
+      ...three,
+      { kind: "job-state", at: 9, id: "j1", state: "error" },
+      { kind: "job-state", at: 10, id: "j2", state: "error" },
+      { kind: "job-state", at: 11, id: "j3", state: "error" },
+    ]);
+    expect(all.groups[0].entries[0].detail).toBe("All 3 Galaxy jobs failed");
+    const cancelled = play([
+      ...three,
+      { kind: "job-state", at: 9, id: "j1", state: "ok" },
+      { kind: "job-state", at: 10, id: "j2", state: "deleted" },
+      { kind: "job-state", at: 11, id: "j3", state: "ok" },
+    ]);
+    expect(cancelled.groups[0].entries[0].detail).toBe("1 of 3 Galaxy jobs was cancelled");
+  });
+
+  it("says a workflow run failed", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      { id: "w1", toolName: "invoke_workflow", phase: "start", at: 1 },
+      {
+        id: "w1",
+        toolName: "invoke_workflow",
+        phase: "end",
+        at: 2,
+        result: { data: { id: "i1", state: "new" }, success: true },
+      },
+      { kind: "job-state", at: 9, id: "i1", state: "failed" },
+    ]);
+    expect(state.groups[0].entries[0]).toMatchObject({
+      status: "failed",
+      failedTitle: "The workflow run failed",
+      detail: "The workflow run failed",
+    });
   });
 
   it("waits for every job a call started, and counts the rest", () => {
@@ -779,6 +838,30 @@ describe("step 7: titles from a call's arguments", () => {
     expect(describeDoneCall("upload_file_from_url", { url: "u", file_name: "counts.tsv" })).toBe(
       "Uploaded counts.tsv",
     );
+  });
+});
+
+describe("failed titles", () => {
+  it("says a change failed in its own words, not as still running", () => {
+    expect(describeFailedCall("run_tool", { tool_id: "rna_star" })).toBe("rna_star failed");
+    expect(
+      describeFailedCall("run_tool", {
+        tool_id: "fastq_dump",
+        inputs: { "input|accession": "SRR22376031" },
+      }),
+    ).toBe("fastq_dump failed on SRR22376031");
+    expect(describeFailedCall("create_history", { history_name: "RNA-seq" })).toBe(
+      'Couldn\'t create history "RNA-seq"',
+    );
+    expect(
+      describeFailedCall("upload_file_from_url", { url: "https://x.org/a/genome.fna.gz" }),
+    ).toBe("Couldn't upload genome.fna.gz");
+  });
+
+  it("has no failed title for reads or changes without words of their own", () => {
+    expect(describeFailedCall("get_history_contents")).toBeUndefined();
+    expect(describeFailedCall("create_page")).toBeUndefined();
+    expect(describeFailedCall("edit")).toBeUndefined();
   });
 });
 
