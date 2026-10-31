@@ -255,7 +255,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
  * A Galaxy job or invocation that has reached an end, successful or not.
  * Whether Galaxy reported the run at an end, successful or not.
  */
-function runEnded(run: GalaxyRun): boolean {
+export function runEnded(run: Pick<GalaxyRun, "kind" | "state">): boolean {
   return run.kind === "invocation"
     ? ["completed", "failed", "cancelled"].includes(run.state)
     : isJobTerminal(run.state);
@@ -323,8 +323,8 @@ function applyJobState(
   }
   const finished =
     galaxyState === "untracked" ||
-    runEnded({ kind: "job", id, state: galaxyState }) ||
-    runEnded({ kind: "invocation", id, state: galaxyState });
+    runEnded({ kind: "job", state: galaxyState }) ||
+    runEnded({ kind: "invocation", state: galaxyState });
   return {
     ...state,
     groups,

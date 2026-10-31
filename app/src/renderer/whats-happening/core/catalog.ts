@@ -12,6 +12,7 @@
 
 import {
   allOperations,
+  isPlainObject,
   type AnyOperation,
   type OperationDomain,
 } from "@galaxyproject/galaxy-ops/browser";
@@ -49,15 +50,13 @@ export function normalizeToolName(toolName: string): NormalizedToolName {
  */
 type Describer = (
   args: Record<string, unknown>,
-  names: NameMemory,
+  names: NameMemory | undefined,
 ) => { now: string; done: string };
-
-const NO_NAMES: NameMemory = { tools: {}, datasets: {}, collections: {}, histories: {} };
 
 const DESCRIBERS: Record<string, Describer> = {
   run_tool: (args, names) => {
     const tool =
-      (typeof args.tool_id === "string" && names.tools[args.tool_id]) ||
+      (typeof args.tool_id === "string" && names?.tools[args.tool_id]) ||
       galaxyToolLabel(args.tool_id);
     const what = `${tool}${onAccession(args.inputs) || onInputs(args.inputs, names)}`;
     return { now: `Running ${what}`, done: `Ran ${what}` };
@@ -215,14 +214,10 @@ function wordingFor(toolName: string): Wording | undefined {
  * for a few changes, plain wording by domain for reads and checks, else the
  * first sentence of the galaxy-ops operation's summary.
  */
-export function describeToolCall(
-  toolName: string,
-  args: unknown,
-  names: NameMemory = NO_NAMES,
-): string {
+export function describeToolCall(toolName: string, args: unknown, names?: NameMemory): string {
   const { name, galaxy } = normalizeToolName(toolName);
   const describer = DESCRIBERS[name];
-  if (describer) return describer(isRecord(args) ? args : {}, names).now;
+  if (describer) return describer(isPlainObject(args) ? args : {}, names).now;
   const wording = wordingFor(toolName);
   if (wording) return wording[0];
   const op = OPERATIONS.get(name);
@@ -237,10 +232,10 @@ export function describeToolCall(
 export function describeDoneCall(
   toolName: string,
   args?: unknown,
-  names: NameMemory = NO_NAMES,
+  names?: NameMemory,
 ): string | undefined {
   const describer = DESCRIBERS[normalizeToolName(toolName).name];
-  if (describer) return describer(isRecord(args) ? args : {}, names).done;
+  if (describer) return describer(isPlainObject(args) ? args : {}, names).done;
   return wordingFor(toolName)?.[1];
 }
 
@@ -263,7 +258,7 @@ function galaxyToolLabel(toolId: unknown): string {
 
 /** A sequencing-run accession among a tool's inputs (SRR / ERR / DRR), as " on SRR123…". */
 function onAccession(inputs: unknown): string {
-  if (!isRecord(inputs)) return "";
+  if (!isPlainObject(inputs)) return "";
   const found = Object.values(inputs).find(
     (v): v is string => typeof v === "string" && /^[SED]RR\d+$/.test(v.trim()),
   );
@@ -275,13 +270,13 @@ function onAccession(inputs: unknown): string {
  * known: ` on "reads.fastq" (#4)` for one, ` on 3 datasets` for several, and
  * nothing when the one input's name hasn't been seen.
  */
-function onInputs(inputs: unknown, names: NameMemory): string {
+function onInputs(inputs: unknown, names: NameMemory | undefined): string {
   const refs: { src: string; id: string }[] = [];
   const walk = (value: unknown, depth: number) => {
     if (depth > 4) return;
     if (Array.isArray(value)) {
       for (const item of value) walk(item, depth + 1);
-    } else if (isRecord(value)) {
+    } else if (isPlainObject(value)) {
       if ((value.src === "hda" || value.src === "hdca") && typeof value.id === "string") {
         refs.push({ src: value.src, id: value.id });
         return;
@@ -298,7 +293,7 @@ function onInputs(inputs: unknown, names: NameMemory): string {
   }
   const [only] = unique;
   const item: NamedItem | undefined =
-    only.src === "hda" ? names.datasets[only.id] : names.collections[only.id];
+    only.src === "hda" ? names?.datasets[only.id] : names?.collections[only.id];
   if (!item) return "";
   return ` on "${item.name}"${item.hid === undefined ? "" : ` (#${item.hid})`}`;
 }
@@ -317,8 +312,4 @@ function fileLabel(value: unknown): string {
     .filter(Boolean)
     .pop();
   return last ?? "a file";
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
