@@ -4,6 +4,7 @@ import {
   classifyTool,
   describeDoneCall,
   describeToolCall,
+  inputRefs,
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
 import { EMPTY_NAMES, learnNames } from "../app/src/renderer/whats-happening/core/names.js";
@@ -797,17 +798,17 @@ describe("step 7: what a result produced", () => {
       }),
     );
     expect(refs).toEqual([
-      { kind: "dataset", id: "d1", label: "#41 forward" },
-      { kind: "dataset", id: "d2", label: "#42 reverse" },
-      { kind: "collection", id: "c1", label: "#43 pairs" },
-      { kind: "job", id: "j1", label: "j1" },
+      { kind: "dataset", id: "d1", label: "#41 forward", hid: 41, name: "forward", role: "output" },
+      { kind: "dataset", id: "d2", label: "#42 reverse", hid: 42, name: "reverse", role: "output" },
+      { kind: "collection", id: "c1", label: "#43 pairs", hid: 43, name: "pairs", role: "output" },
+      { kind: "job", id: "j1", label: "j1", role: "output" },
     ]);
     expect(producedSummary(refs)).toBe("2 new datasets (#41, #42), 1 new collection (#43)");
   });
 
   it("links the history a call created, and the workflow runs it started", () => {
     expect(producedRefs("create_history", ok({ id: "h1", name: "RNA-seq" }))).toEqual([
-      { kind: "history", id: "h1", label: "RNA-seq" },
+      { kind: "history", id: "h1", label: "RNA-seq", name: "RNA-seq", role: "output" },
     ]);
     expect(producedRefs("invoke_workflow", ok([{ id: "i1" }, { id: "i2" }]))).toHaveLength(2);
   });
@@ -818,6 +819,10 @@ describe("step 7: what a result produced", () => {
     );
     expect(producedRefs("get_history_contents", ok([{ id: "d1" }]))).toEqual([]);
     expect(producedSummary([{ kind: "job", id: "j1", label: "j1" }])).toBeUndefined();
+    // Inputs are not something a call produced.
+    expect(
+      producedSummary([{ kind: "dataset", id: "d4", label: "#4", hid: 4, role: "input" }]),
+    ).toBeUndefined();
   });
 });
 
@@ -943,8 +948,8 @@ describe("step 8: name memory", () => {
       ]),
     );
     names = learnNames(names, "get_histories", ok([{ id: "h1", name: "RNA-seq" }]));
-    expect(names.datasets).toEqual({ d4: { name: "synthetic_counts.tsv", hid: 4 } });
-    expect(names.collections).toEqual({ c9: { name: "pairs", hid: 9 } });
+    expect(names.datasets).toEqual({ d4: { id: "d4", name: "synthetic_counts.tsv", hid: 4 } });
+    expect(names.collections).toEqual({ c9: { id: "c9", name: "pairs", hid: 9 } });
     expect(names.histories).toEqual({ h1: "RNA-seq" });
   });
 
@@ -975,7 +980,7 @@ describe("step 8: name memory", () => {
     expect(learnNames(names, "get_tool_details", ok({ id: "x", name: "X" }))).toBe(names);
   });
 
-  it("titles a later tool run with the tool's name and its input's name and number", () => {
+  it("titles a later tool run with the tool's name and its input's name and history item index", () => {
     const state = play([
       { kind: "group-start", at: 0 },
       start("a", "get_tool_details", { tool_id: "random_lines1" }),
@@ -1025,5 +1030,61 @@ describe("step 8: name memory", () => {
     expect(
       describeToolCall("run_tool", { tool_id: "fastq_dump", inputs: { acc: "SRR1" } }, names),
     ).toBe("Running Faster Download on SRR1");
+  });
+});
+
+describe("input refs: the id always travels with the history item index", () => {
+  const ok = (data: unknown) => ({ data, success: true, message: "" });
+
+  it("lists each dataset and collection a call's inputs point at once, with id, history item index and name when known", () => {
+    const names = learnNames(
+      EMPTY_NAMES,
+      "get_history_contents",
+      ok([{ id: "d4", hid: 4, name: "counts", history_content_type: "dataset" }]),
+    );
+    const refs = inputRefs(
+      {
+        input1: { src: "hda", id: "d4" },
+        repeat_0: {
+          input2: {
+            values: [
+              { src: "hdca", id: "c9" },
+              { src: "hda", id: "d4" },
+            ],
+          },
+        },
+      },
+      names,
+    );
+    expect(refs).toEqual([
+      { kind: "dataset", id: "d4", label: "#4 counts", hid: 4, name: "counts", role: "input" },
+      { kind: "collection", id: "c9", label: "c9", role: "input" },
+    ]);
+  });
+
+  it("puts a tool run's inputs on its entry, then adds what it produced", () => {
+    const state = play([
+      { kind: "group-start", at: 0 },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "start",
+        at: 1,
+        args: { tool_id: "cat1", inputs: { input1: { src: "hda", id: "d4" } } },
+      },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        at: 2,
+        result: ok({ outputs: [{ id: "d7", hid: 7, name: "out" }], jobs: [] }),
+      },
+    ]);
+    const entry = state.groups[0].entries[0];
+    expect(entry.links.map((l) => [l.role, l.kind, l.id, l.hid])).toEqual([
+      ["input", "dataset", "d4", undefined],
+      ["output", "dataset", "d7", 7],
+    ]);
+    expect(entry.detail).toBe("1 new dataset (#7)");
   });
 });

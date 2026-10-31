@@ -17,7 +17,8 @@ import {
   type OperationDomain,
 } from "@galaxyproject/galaxy-ops/browser";
 
-import type { NameMemory, NamedItem, ToolKind } from "./types.js";
+import { galaxyRef } from "./refs.js";
+import type { GalaxyRef, NameMemory, ToolKind } from "./types.js";
 
 const GALAXY_PREFIXES = ["mcp__galaxy__", "galaxy_"];
 
@@ -266,36 +267,52 @@ function onAccession(inputs: unknown): string {
 }
 
 /**
- * The datasets and collections a tool's inputs point at, said by name when
- * known: ` on "reads.fastq" (#4)` for one, ` on 3 datasets` for several, and
- * nothing when the one input's name hasn't been seen.
+ * The datasets and collections a call's inputs point at (`{ src: "hda" | "hdca",
+ * id }` anywhere in them), each once, as input refs: always with the Galaxy id,
+ * and with the history item index and name when they've been seen.
  */
-function onInputs(inputs: unknown, names: NameMemory | undefined): string {
-  const refs: { src: string; id: string }[] = [];
+export function inputRefs(inputs: unknown, names?: NameMemory): GalaxyRef[] {
+  const found = new Map<string, GalaxyRef>();
   const walk = (value: unknown, depth: number) => {
     if (depth > 4) return;
     if (Array.isArray(value)) {
       for (const item of value) walk(item, depth + 1);
     } else if (isPlainObject(value)) {
       if ((value.src === "hda" || value.src === "hdca") && typeof value.id === "string") {
-        refs.push({ src: value.src, id: value.id });
+        if (found.has(value.id)) return;
+        const collection = value.src === "hdca";
+        const known = collection ? names?.collections[value.id] : names?.datasets[value.id];
+        found.set(
+          value.id,
+          galaxyRef(collection ? "collection" : "dataset", value.id, {
+            hid: known?.hid,
+            name: known?.name,
+            role: "input",
+          }),
+        );
         return;
       }
       for (const child of Object.values(value)) walk(child, depth + 1);
     }
   };
   walk(inputs, 0);
-  const unique = refs.filter((r, i) => refs.findIndex((o) => o.id === r.id) === i);
-  if (unique.length === 0) return "";
-  if (unique.length > 1) {
-    const collections = unique.every((r) => r.src === "hdca");
-    return ` on ${unique.length} ${collections ? "collections" : "datasets"}`;
+  return [...found.values()];
+}
+
+/**
+ * The inputs said in a title: ` on "reads.fastq" (#4)` for one whose name is
+ * known, ` on 3 datasets` for several, and nothing for one it hasn't seen.
+ */
+function onInputs(inputs: unknown, names: NameMemory | undefined): string {
+  const refs = inputRefs(inputs, names);
+  if (refs.length === 0) return "";
+  if (refs.length > 1) {
+    const collections = refs.every((r) => r.kind === "collection");
+    return ` on ${refs.length} ${collections ? "collections" : "datasets"}`;
   }
-  const [only] = unique;
-  const item: NamedItem | undefined =
-    only.src === "hda" ? names?.datasets[only.id] : names?.collections[only.id];
-  if (!item) return "";
-  return ` on "${item.name}"${item.hid === undefined ? "" : ` (#${item.hid})`}`;
+  const [only] = refs;
+  if (only.name === undefined) return "";
+  return ` on "${only.name}"${only.hid === undefined ? "" : ` (#${only.hid})`}`;
 }
 
 function quoted(value: unknown): string {

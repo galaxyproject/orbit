@@ -37,8 +37,13 @@ export type GalaxyRefKind =
 export interface GalaxyRef {
   kind: GalaxyRefKind;
   id: string;
-  /** What the user sees, e.g. the dataset or history name. */
+  /** What the user sees, e.g. `#41 forward`, built from the history item index and name when known. */
   label: string;
+  /** The item's history item index, `hid` (datasets and collections), when known. */
+  hid?: number;
+  name?: string;
+  /** Whether the call read this item or produced it. */
+  role?: "input" | "output";
 }
 
 /**
@@ -192,8 +197,9 @@ export interface GalaxyWork {
   since: number;
 }
 
-/** A dataset or collection's name, and its number in the history when known. */
+/** A dataset or collection: its Galaxy id, its name, and its history item index (`hid`) when known. */
 export interface NamedItem {
+  id: string;
   name: string;
   hid?: number;
 }

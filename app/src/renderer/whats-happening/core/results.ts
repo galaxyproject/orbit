@@ -11,6 +11,7 @@
 import { isPlainObject, type GalaxyResult } from "@galaxyproject/galaxy-ops/browser";
 
 import { normalizeToolName } from "./catalog.js";
+import { galaxyRef } from "./refs.js";
 import type { GalaxyRef, GalaxyRefKind } from "./types.js";
 
 /** A Galaxy job or workflow invocation a call started, as the result reported it. */
@@ -67,7 +68,7 @@ function workOf(kind: StartedWork["kind"], value: unknown): StartedWork[] {
 /**
  * What a successful call produced or touched, as links to Galaxy: the
  * datasets and collections a tool run or upload made (with their history
- * numbers and names), its jobs, the history a call created, the workflow
+ * item indexes and names), its jobs, the history a call created, the workflow
  * runs it started. Nothing for a failed call or a read.
  */
 export function producedRefs(toolName: string, result: unknown): GalaxyRef[] {
@@ -103,10 +104,9 @@ function refsOf(kind: GalaxyRefKind, values: unknown): GalaxyRef[] {
   if (!Array.isArray(values)) return [];
   return values.flatMap((value) => {
     if (!isPlainObject(value) || typeof value.id !== "string") return [];
-    const hid = typeof value.hid === "number" ? `#${value.hid}` : "";
-    const name = typeof value.name === "string" ? value.name : "";
-    const label = [hid, name].filter(Boolean).join(" ") || value.id;
-    return [{ kind, id: value.id, label }];
+    const hid = typeof value.hid === "number" ? value.hid : undefined;
+    const name = typeof value.name === "string" && value.name ? value.name : undefined;
+    return [galaxyRef(kind, value.id, { hid, name, role: "output" })];
   });
 }
 
@@ -117,9 +117,9 @@ export function producedSummary(refs: readonly GalaxyRef[]): string | undefined 
     ["dataset", "new dataset", "new datasets"],
     ["collection", "new collection", "new collections"],
   ] as const) {
-    const found = refs.filter((r) => r.kind === kind);
+    const found = refs.filter((r) => r.kind === kind && r.role !== "input");
     if (found.length === 0) continue;
-    const hids = found.map((r) => r.label.match(/^#\d+/)?.[0]).filter(Boolean);
+    const hids = found.flatMap((r) => (r.hid === undefined ? [] : [`#${r.hid}`]));
     const list = hids.length === found.length ? ` (${hids.join(", ")})` : "";
     parts.push(`${found.length} ${found.length === 1 ? one : many}${list}`);
   }

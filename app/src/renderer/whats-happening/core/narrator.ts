@@ -7,12 +7,13 @@
  * so a caller can skip a redraw with a plain `===` check.
  */
 
-import { isJobSuccess, isJobTerminal } from "@galaxyproject/galaxy-ops/browser";
+import { isJobSuccess, isJobTerminal, isPlainObject } from "@galaxyproject/galaxy-ops/browser";
 
 import {
   classifyTool,
   describeDoneCall,
   describeToolCall,
+  inputRefs,
   operationFor,
   startsGalaxyWork,
 } from "./catalog.js";
@@ -55,7 +56,7 @@ export function narrate(
           status: "running",
           title: describeToolCall(event.toolName, event.args, names),
           ...doneTitleFor(event.toolName, event.args, names),
-          links: [],
+          links: isPlainObject(event.args) ? inputRefs(event.args.inputs, names) : [],
           startedAt: event.at,
         },
       ];
@@ -429,8 +430,8 @@ function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
       ...(reason ? { detail: reason } : {}),
     };
   }
-  const links = producedRefs(event.toolName, event.result);
-  if (links.length === 0) return entry;
-  const detail = producedSummary(links);
-  return { ...entry, links, ...(detail ? { detail } : {}) };
+  const produced = producedRefs(event.toolName, event.result);
+  if (produced.length === 0) return entry;
+  const detail = producedSummary(produced);
+  return { ...entry, links: [...entry.links, ...produced], ...(detail ? { detail } : {}) };
 }

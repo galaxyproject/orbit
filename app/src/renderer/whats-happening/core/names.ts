@@ -41,10 +41,10 @@ export function learnNames(names: NameMemory, toolName: string, result: unknown)
     let value: string | NamedItem = name;
     if (type === "dataset" || type === "HistoryDatasetAssociation") {
       into = learned.datasets;
-      value = hid === undefined ? { name } : { name, hid };
+      value = hid === undefined ? { id, name } : { id, name, hid };
     } else if (type === "dataset_collection" || type === "HistoryDatasetCollectionAssociation") {
       into = learned.collections;
-      value = hid === undefined ? { name } : { name, hid };
+      value = hid === undefined ? { id, name } : { id, name, hid };
     } else if (domain === "tools" || domain === "userTools") {
       into = learned.tools;
     } else if (domain === "histories" && hid === undefined) {
@@ -84,11 +84,4 @@ function namedRecords(data: unknown): NamedRecord[] {
   };
   walk(data, 0);
   return found;
-}
-
-/** How a dataset or collection is called in a title: `"reads.fastq" (#4)`, or `#4`, or nothing. */
-export function itemLabel(item: NamedItem | undefined): string | undefined {
-  if (!item) return undefined;
-  const hid = item.hid === undefined ? "" : ` (#${item.hid})`;
-  return `"${item.name}"${hid}`;
 }
