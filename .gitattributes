@@ -4,6 +4,10 @@
 # the copy a Windows contributor sees.
 extensions/orbit/vendor/** text eol=lf
 
+# Staging skills are the source of part of that tree, and their shell examples are
+# parsed by a test that the Windows leg runs against a CRLF checkout otherwise.
+skills/** text eol=lf
+
 # The sync script starts with a #! line and is imported by the tests. Checked out
 # with CRLF, the test runner's module transform no longer recognises the hashbang
 # and the import dies with "Invalid or unexpected token", which is how the Windows

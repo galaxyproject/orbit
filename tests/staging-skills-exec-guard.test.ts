@@ -23,9 +23,9 @@ function skillFiles(): string[] {
 
 function shellCommands(markdown: string): string[] {
   const out: string[] = [];
-  for (const m of markdown.matchAll(/```(?:bash|sh|shell)\n([\s\S]*?)```/g)) {
-    const joined = m[1].replace(/\\\n\s*/g, " ");
-    for (const line of joined.split("\n")) {
+  for (const m of markdown.matchAll(/```(?:bash|sh|shell)\r?\n([\s\S]*?)```/g)) {
+    const joined = m[1].replace(/\\\r?\n\s*/g, " ");
+    for (const line of joined.split(/\r?\n/)) {
       const cmd = line.trim();
       if (cmd && !cmd.startsWith("#")) out.push(cmd);
     }
