@@ -284,8 +284,11 @@ export interface NarrationState {
 
 /** One change to the user's Galaxy, with the reads and checks that belong to it. */
 export interface NarrationRow {
+  /** The change, or its latest try when earlier ones failed. */
   change: NarrationEntry;
-  /** Reads and checks done for this change, in order. */
+  /** Earlier tries at the same change that failed, oldest first. */
+  attempts: readonly NarrationEntry[];
+  /** Reads and checks done for this change (and its earlier tries), in order. */
   children: readonly NarrationEntry[];
 }
 

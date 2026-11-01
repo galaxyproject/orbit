@@ -1781,3 +1781,119 @@ describe("rows: changes with their children", () => {
     expect(rows.map((r) => [r.change.id, ids(r.children)])).toEqual([["run1", ["look1"]]]);
   });
 });
+
+describe("rows: a failed try and its retry", () => {
+  const tryRun = (
+    id: string,
+    at: number,
+    dataset: string,
+    failed: boolean,
+    tool = "cat1",
+  ): ToolEvent[] => [
+    {
+      id,
+      toolName: "run_tool",
+      phase: "start",
+      groupId: "m1",
+      at,
+      args: { tool_id: tool, inputs: { input1: { src: "hda", id: dataset } } },
+    },
+    failed
+      ? {
+          id,
+          toolName: "run_tool",
+          phase: "end",
+          groupId: "m1",
+          at: at + 1,
+          isError: true,
+          result: "Error: bad parameter",
+        }
+      : {
+          id,
+          toolName: "run_tool",
+          phase: "end",
+          groupId: "m1",
+          at: at + 1,
+          result: { data: { outputs: [{ id: `out-${id}` }], jobs: [] }, success: true },
+        },
+  ];
+  const upload = (id: string, at: number, file: string, failed: boolean): ToolEvent[] => [
+    {
+      id,
+      toolName: "upload_file_from_url",
+      phase: "start",
+      groupId: "m1",
+      at,
+      args: { url: `https://x.org/${file}` },
+    },
+    {
+      id,
+      toolName: "upload_file_from_url",
+      phase: "end",
+      groupId: "m1",
+      at: at + 1,
+      isError: failed,
+    },
+  ];
+  const look = (id: string, at: number): ToolEvent[] => [
+    {
+      id,
+      toolName: "get_tool_details",
+      phase: "start",
+      groupId: "m1",
+      at,
+      args: { tool_id: "cat1" },
+    },
+    { id, toolName: "get_tool_details", phase: "end", groupId: "m1", at: at + 1 },
+  ];
+  const rowsFor = (events: NarrationEvent[]) =>
+    rowsOf(play([{ kind: "group-start", groupId: "m1", at: 0 }, ...events]).groups[0]).rows;
+  const shape = (rows: ReturnType<typeof rowsFor>) =>
+    rows.map((r) => [
+      r.change.id,
+      r.change.status,
+      r.attempts.map((a) => a.id),
+      r.children.map((c) => c.id),
+    ]);
+
+  it("shows a failed run and its retry as one row, with the reads of both", () => {
+    const rows = rowsFor([
+      ...tryRun("t1", 1, "d4", true),
+      ...look("l1", 3),
+      ...tryRun("t2", 5, "d4", false),
+    ]);
+    expect(shape(rows)).toEqual([["t2", "done", ["t1"], ["l1"]]]);
+    expect(rows[0].attempts[0].detail).toBe("bad parameter");
+  });
+
+  it("keeps every failed try, oldest first, and the row's status is the last try's", () => {
+    const rows = rowsFor([
+      ...tryRun("t1", 1, "d4", true),
+      ...tryRun("t2", 3, "d4", true),
+      ...tryRun("t3", 5, "d4", true),
+    ]);
+    expect(shape(rows)).toEqual([["t3", "failed", ["t1", "t2"], []]]);
+  });
+
+  it("keeps a failed change on its own row when what comes next isn't the same change", () => {
+    const rows = rowsFor([
+      ...tryRun("t1", 1, "d4", true),
+      ...tryRun("t2", 3, "d5", false),
+      ...tryRun("t3", 5, "d4", false, "sort1"),
+      ...upload("u1", 7, "a.bed", true),
+      ...upload("u2", 9, "b.bed", false),
+    ]);
+    expect(shape(rows).map(([id, , attempts]) => [id, attempts])).toEqual([
+      ["t1", []],
+      ["t2", []],
+      ["t3", []],
+      ["u1", []],
+      ["u2", []],
+    ]);
+  });
+
+  it("folds a failed upload into the upload of the same file", () => {
+    const rows = rowsFor([...upload("u1", 1, "a.bed", true), ...upload("u2", 3, "a.bed", false)]);
+    expect(shape(rows)).toEqual([["u2", "done", ["u1"], []]]);
+  });
+});
