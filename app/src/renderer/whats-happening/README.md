@@ -31,11 +31,14 @@ whats-happening/
    …), so groups can run side by side; each ends on its own `group-end`.
 2. Fold them in with `advance(state, event)`, starting from `EMPTY_STATE`.
    It is pure and returns the same state when nothing changed.
-3. Draw `state.groups` and what is happening now: `currentActivity(state)`
-   lists every group at work, every wait on the user and every piece of
-   Galaxy work still running; `currentStatus(state)` is one line for when
-   there is room for only one.
-4. Send each Galaxy job's and workflow run's state as a `job-state` event,
+3. Draw `state.groups`, plus what is happening now:
+   - `currentActivity(state)`: everything going on at once.
+   - `currentStatus(state)`: one line, when there is room for only one.
+4. To show the work done for a user's message, put the message's id on its
+   `group-message` event. For the harness's own follow-ups, also say which
+   Galaxy jobs they are about. Everything done for a message, follow-ups
+   included, can then be shown with that message.
+5. Send each Galaxy job's and workflow run's state as a `job-state` event,
    from the harness's own poller, so rows stay "running" until Galaxy says
    they are done.
 

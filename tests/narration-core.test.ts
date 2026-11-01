@@ -17,8 +17,10 @@ import {
 } from "../app/src/renderer/whats-happening/core/results.js";
 import {
   advance,
+  anchorUserMessage,
   currentActivity,
   currentStatus,
+  groupsForUserMessage,
   EMPTY_STATE,
   narrate,
 } from "../app/src/renderer/whats-happening/core/narrator.js";
@@ -319,9 +321,18 @@ describe("advance: groups and the live status line", () => {
   it("marks a group the harness started itself as a follow-up", () => {
     const state = play([
       { kind: "group-start", groupId: "m1", at: 36 },
-      { kind: "group-info", groupId: "m1", at: 36, text: "[auto] check the job", followUp: true },
+      {
+        kind: "group-message",
+        groupId: "m1",
+        at: 36,
+        text: "[auto] check the job",
+        followUp: true,
+      },
     ]);
-    expect(state.groups[0]).toMatchObject({ followUp: true, text: "[auto] check the job" });
+    expect(state.groups[0]).toMatchObject({
+      followUp: true,
+      messages: [{ text: "[auto] check the job", at: 36, by: "harness" }],
+    });
     expect(currentStatus(state)?.text).toBe("Checking on your Galaxy work…");
   });
 
@@ -1515,5 +1526,123 @@ describe("everything happening now", () => {
     ]);
     expect(currentActivity(state)).toEqual([]);
     expect(currentActivity(EMPTY_STATE)).toEqual([]);
+  });
+});
+
+describe("the message a group serves", () => {
+  const ran = (id: string, groupId: string, jobId: string, at: number): ToolEvent[] => [
+    { id, toolName: "run_tool", phase: "start", groupId, at, args: { tool_id: "fastp" } },
+    {
+      id,
+      toolName: "run_tool",
+      phase: "end",
+      groupId,
+      at: at + 1,
+      result: { data: { jobs: [{ id: jobId, state: "queued" }] }, success: true },
+    },
+  ];
+
+  it("anchors a group to its first message, and keeps messages added mid-run after it", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      {
+        kind: "group-message",
+        groupId: "m1",
+        at: 0,
+        text: "Trim the reads",
+        followUp: false,
+        messageId: "u1",
+      },
+      {
+        kind: "group-message",
+        groupId: "m1",
+        at: 5,
+        text: "Use fastp",
+        followUp: false,
+        messageId: "u2",
+      },
+      {
+        kind: "group-message",
+        groupId: "m1",
+        at: 6,
+        text: "Use fastp",
+        followUp: false,
+        messageId: "u2",
+      },
+    ]);
+    const [group] = state.groups;
+    expect(group.messages.map((m) => [m.id, m.text, m.by])).toEqual([
+      ["u1", "Trim the reads", "user"],
+      ["u2", "Use fastp", "user"],
+    ]);
+    expect(anchorUserMessage(state, group)?.id).toBe("u1");
+    // The message added mid-run finds the work done for it too.
+    expect(groupsForUserMessage(state, "u2").map((g) => g.id)).toEqual(["m1"]);
+  });
+
+  it("points a follow-up at the message whose Galaxy work it checks, and gathers both under it", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      {
+        kind: "group-message",
+        groupId: "m1",
+        at: 0,
+        text: "Trim the reads",
+        followUp: false,
+        messageId: "u1",
+      },
+      ...ran("t1", "m1", "j1", 1),
+      { kind: "group-end", groupId: "m1", at: 3 },
+      { kind: "group-start", groupId: "m2", at: 4 },
+      {
+        kind: "group-message",
+        groupId: "m2",
+        at: 4,
+        text: "What histories do I have?",
+        followUp: false,
+        messageId: "u2",
+      },
+      { kind: "group-start", groupId: "f1", at: 9 },
+      {
+        kind: "group-message",
+        groupId: "f1",
+        at: 9,
+        text: "[auto] j1 finished",
+        followUp: true,
+        about: [{ kind: "job", id: "j1" }],
+      },
+    ]);
+    const followUp = state.groups[2];
+    expect(followUp).toMatchObject({
+      followUp: true,
+      about: [{ kind: "job", id: "j1" }],
+      followUpOf: ["m1"],
+    });
+    expect(anchorUserMessage(state, followUp)?.text).toBe("Trim the reads");
+    expect(groupsForUserMessage(state, "u1").map((g) => g.id)).toEqual(["m1", "f1"]);
+    expect(groupsForUserMessage(state, "u2").map((g) => g.id)).toEqual(["m2"]);
+  });
+
+  it("leaves a follow-up unanchored when it names no work it knows, or names it as the wrong kind", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      ...ran("t1", "m1", "j1", 1),
+      { kind: "group-end", groupId: "m1", at: 3 },
+      { kind: "group-start", groupId: "f1", at: 4 },
+      {
+        kind: "group-message",
+        groupId: "f1",
+        at: 4,
+        text: "[auto] check",
+        followUp: true,
+        about: [
+          { kind: "job", id: "zz" },
+          { kind: "invocation", id: "j1" },
+        ],
+      },
+    ]);
+    const followUp = state.groups[1];
+    expect(followUp.followUpOf).toBeUndefined();
+    expect(anchorUserMessage(state, followUp)).toBeUndefined();
   });
 });

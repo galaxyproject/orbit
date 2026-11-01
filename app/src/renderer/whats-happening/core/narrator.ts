@@ -30,6 +30,8 @@ import {
 import type {
   ActivityLine,
   GalaxyRun,
+  GalaxyRunRef,
+  GroupMessage,
   NameMemory,
   NarrationEntry,
   NarrationEvent,
@@ -103,6 +105,7 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       if (activeGroup(state, event.groupId)) return state;
       const group: NarrationGroup = {
         id: event.groupId,
+        messages: [],
         followUp: false,
         status: "active",
         now: { text: "Reading your request…", since: event.at },
@@ -111,16 +114,30 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       };
       return { ...state, groups: [...state.groups, group] };
     }
-    case "group-info":
-      return updateActive(state, event.groupId, (g) => ({
-        ...g,
-        text: event.text,
-        followUp: event.followUp,
-        now:
-          event.followUp && g.now?.text === "Reading your request…"
-            ? { text: "Checking on your Galaxy work…", since: g.now.since }
-            : g.now,
-      }));
+    case "group-message":
+      return updateActive(state, event.groupId, (g) => {
+        // The same message reported twice adds nothing.
+        if (event.messageId && g.messages.some((m) => m.id === event.messageId)) return g;
+        const message: GroupMessage = {
+          ...(event.messageId ? { id: event.messageId } : {}),
+          text: event.text,
+          at: event.at,
+          by: event.followUp ? "harness" : "user",
+        };
+        const followUpOf = event.about ? groupsThatStarted(state, event.about) : [];
+        return {
+          ...g,
+          messages: [...g.messages, message],
+          // A group the harness started stays its own, even once the user adds a message.
+          followUp: g.messages.length === 0 ? event.followUp : g.followUp,
+          ...(event.about?.length ? { about: event.about } : {}),
+          ...(followUpOf.length > 0 ? { followUpOf } : {}),
+          now:
+            event.followUp && g.now?.text === "Reading your request…"
+              ? { text: "Checking on your Galaxy work…", since: g.now.since }
+              : g.now,
+        };
+      });
     case "model":
       return updateActive(state, event.groupId, (g) =>
         withNow(g, MODEL_STATUS[event.activity], event.at),
@@ -475,6 +492,54 @@ function replaced<T>(items: readonly T[], index: number, item: T): T[] {
   const copy = items.slice();
   copy[index] = item;
   return copy;
+}
+
+/** The groups whose calls started any of these Galaxy jobs or invocations, in order. */
+function groupsThatStarted(state: NarrationState, runs: readonly GalaxyRunRef[]): string[] {
+  const started = (r: GalaxyRun): boolean =>
+    runs.some((ref) => ref.kind === r.kind && ref.id === r.id);
+  return state.groups
+    .filter((g) => g.entries.some((e) => e.galaxy?.some(started)))
+    .map((g) => g.id);
+}
+
+/**
+ * The message a group serves: its first message from the user, or for a
+ * follow-up the harness started, the message of the work it follows up on.
+ * Undefined when nothing ties the group to a message.
+ */
+export function anchorUserMessage(
+  state: NarrationState,
+  group: NarrationGroup,
+  seen: ReadonlySet<string> = new Set(),
+): GroupMessage | undefined {
+  const ownUserMessage = group.messages.find((m) => m.by === "user");
+  if (ownUserMessage) return ownUserMessage;
+  const visited = new Set([...seen, group.id]);
+  for (const id of group.followUpOf ?? []) {
+    const origin = state.groups.find((g) => g.id === id);
+    if (!origin || visited.has(id)) continue;
+    const originUserMessage = anchorUserMessage(state, origin, visited);
+    if (originUserMessage) return originUserMessage;
+  }
+  return undefined;
+}
+
+/**
+ * Everything done for one message the user sent (e.g. a chat bubble), by the
+ * harness's id for it: the group it started or was added to, and the
+ * follow-ups on that work, in order. What a display shows under or links from
+ * that message.
+ */
+export function groupsForUserMessage(
+  state: NarrationState,
+  userMessageId: string,
+): NarrationGroup[] {
+  return state.groups.filter(
+    (g) =>
+      g.messages.some((m) => m.id === userMessageId) ||
+      anchorUserMessage(state, g)?.id === userMessageId,
+  );
 }
 
 function updateActive(

@@ -105,13 +105,21 @@ export type LifecycleEvent =
       groupId: string;
     }
   | {
-      kind: "group-info";
+      /**
+       * A message this group is working on. Usually the user's: the first one is
+       * what started the group, and any sent while it runs are added after it.
+       */
+      kind: "group-message";
       at: number;
       groupId: string;
-      /** The message that started the group, as the user typed it. */
+      /** The message, whole, as it was sent. */
       text: string;
-      /** True when the harness started the group itself (e.g. to follow up on a Galaxy job). */
+      /** True when the harness sent it itself (e.g. to follow up on a Galaxy job), not the user. */
       followUp: boolean;
+      /** The harness's id for the message (e.g. its chat bubble), so a display can find the group from it. */
+      messageId?: string;
+      /** For a follow-up: the Galaxy jobs or workflow invocations it is about. */
+      about?: readonly GalaxyRunRef[];
     }
   | { kind: "model"; at: number; activity: "thinking" | "writing" | "tool-call"; groupId: string }
   | { kind: "group-end"; at: number; error?: string; groupId: string }
@@ -182,12 +190,27 @@ export interface WaitingRequest extends NowLine {
   id?: string;
 }
 
+/** A message a group serves, kept whole. */
+export interface GroupMessage {
+  /** The harness's id for the message, when it has one. */
+  id?: string;
+  text: string;
+  at: number;
+  /** Whether the user sent it, or the harness itself (a follow-up). */
+  by: "user" | "harness";
+}
+
 /** All the work done for one message. */
 export interface NarrationGroup {
   id: string;
-  /** The message that started the group, once known. */
-  text?: string;
+  /** The messages this group serves, in order; its anchor is the first from the user (see `anchorUserMessage`). */
+  messages: readonly GroupMessage[];
+  /** True when the harness started the group itself. */
   followUp: boolean;
+  /** For a follow-up: the Galaxy jobs or workflow invocations it is about, as the harness named them. */
+  about?: readonly GalaxyRunRef[];
+  /** For a follow-up: the groups that started that Galaxy work. */
+  followUpOf?: readonly string[];
   /** `waiting`: the group ended, and the harness is waiting on the user (see `waitingFor`). */
   status: "active" | "done" | "stopped" | "waiting";
   /** Only while active. */
@@ -210,6 +233,9 @@ export interface GalaxyRun {
   /** Set when the harness stopped following this run before it reached an end. */
   untracked?: boolean;
 }
+
+/** Which Galaxy job or workflow invocation, without its state. */
+export type GalaxyRunRef = Pick<GalaxyRun, "kind" | "id">;
 
 /** Galaxy work that was started and hasn't been reported finished yet. */
 export interface GalaxyWork {
