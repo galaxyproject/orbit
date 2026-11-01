@@ -2,12 +2,15 @@
  * Tell the model when it is resending a call that keeps failing the same way.
  *
  * A small model handed an error it cannot fix tends to resend the call
- * unchanged, or change something that doesn't matter, and grind there for as
- * many turns as the user lets it (#617). Once the same tool, called with the
- * same arguments, has failed with the same first line of error in a few model
- * turns in a row, the result gets a note saying so and telling the model to
- * change approach or ask the user. The call itself still runs: the Galaxy
- * repeat guard is the one that refuses, and only for Galaxy tools.
+ * unchanged and grind there for as many turns as the user lets it (#617).
+ * Once the same tool, called with exactly the same arguments, has failed with
+ * the same first line of error in a few model turns in a row, the result gets
+ * a note saying so and telling the model to change approach or ask the user.
+ * A model that changes something irrelevant between tries starts a new streak
+ * each time and is not caught: loosening the argument match would also flag
+ * real work over different inputs that happen to share an error. The call
+ * itself still runs: the Galaxy repeat guard is the one that refuses, and only
+ * for Galaxy tools.
  *
  * Streaks are counted in model turns, not results. pi runs a turn's tool calls
  * in parallel and hands their results over in completion order, so counting
@@ -15,11 +18,18 @@
  * turn, and would count three copies of one call in a single batch as three
  * tries when the model has not yet seen any of the errors. A turn in which the
  * call didn't fail -- it succeeded, failed differently, or the model did
- * something else -- ends the streak.
+ * something else -- ends the streak. Another call in the same turn does not,
+ * even one that changed what this call reads: a model editing code and
+ * rerunning the same test command each turn can get the note while making
+ * progress, when the test output starts the same way every time. That is
+ * accepted because the note is advice and tells the model to read the error.
  *
- * Any tool counts, and a result counts as failed when pi marks it an error or
- * the tool sets `details.error`: Orbit's own tools return their rejections
- * that way, as text the model is meant to read.
+ * Any tool that actually ran counts, and a result counts as failed when pi
+ * marks it an error or the tool sets `details.error`: Orbit's own tools return
+ * their rejections that way, as text the model is meant to read. A call pi
+ * answers without running it -- an unknown tool, arguments that fail schema
+ * validation, or a `tool_call` hook blocking it -- never reaches `tool_result`,
+ * so a loop on one of those gets no note.
  */
 import { createHash } from "node:crypto";
 import type { ExtensionAPI, ToolResultEvent } from "@earendil-works/pi-coding-agent";
