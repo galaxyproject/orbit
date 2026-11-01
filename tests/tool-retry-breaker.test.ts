@@ -239,9 +239,11 @@ describe("registerToolRetryBreaker", () => {
     }
   });
 
+  // Empty tool text is the case that matters: with any text of its own, the
+  // hint block lands below the first line and never reaches the comparison.
   it("compares errors without a lesson hint Orbit appended to one of them", () => {
     const b = breaker();
-    const base: Content = [{ type: "text", text: "boom" }];
+    const base: Content = [{ type: "text", text: "" }];
     b.attempt(
       "t",
       { a: 1 },
