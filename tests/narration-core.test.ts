@@ -17,6 +17,7 @@ import {
 } from "../app/src/renderer/whats-happening/core/results.js";
 import {
   advance,
+  currentActivity,
   currentStatus,
   EMPTY_STATE,
   narrate,
@@ -1411,5 +1412,64 @@ describe("step 12a: groups side by side", () => {
     const back = advance(two, { kind: "group-end", at: 2, groupId: "msg-2" });
     expect(currentStatus(back)?.since).toBe(0);
     expect(currentStatus(advance(back, { kind: "group-end", at: 3, groupId: "msg-1" }))).toBeNull();
+  });
+});
+
+describe("everything happening now", () => {
+  const submitted = (id: string, groupId: string, jobId: string, at: number): ToolEvent[] => [
+    { id, toolName: "run_tool", phase: "start", groupId, at, args: { tool_id: "fastp" } },
+    {
+      id,
+      toolName: "run_tool",
+      phase: "end",
+      groupId,
+      at: at + 1,
+      result: { data: { jobs: [{ id: jobId, state: "queued" }] }, success: true },
+    },
+  ];
+
+  it("shows a paused follow-up and the Galaxy jobs still running, together", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      ...submitted("t1", "m1", "j1", 1),
+      ...submitted("t2", "m1", "j2", 3),
+      { kind: "group-end", groupId: "m1", at: 5 },
+      { kind: "awaiting-user", groupId: "m1", at: 6, text: "say continue", id: "follow-up-paused" },
+    ]);
+    expect(currentActivity(state)).toEqual([
+      { kind: "waiting", groupId: "m1", id: "follow-up-paused", text: "say continue", since: 6 },
+      { kind: "galaxy", groupId: "m1", galaxyId: "j1", text: "Running fastp", since: 2 },
+      { kind: "galaxy", groupId: "m1", galaxyId: "j2", text: "Running fastp", since: 4 },
+    ]);
+    // With room for one line, the wait still comes first, as before.
+    expect(currentStatus(state)?.text).toBe("Waiting for you: say continue");
+  });
+
+  it("lists groups at work newest first, then waits oldest first, then Galaxy work", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 1, text: "approve A", id: "a" },
+      { kind: "group-start", groupId: "m2", at: 2 },
+      { kind: "awaiting-user", groupId: "m2", at: 3, text: "approve B", id: "b" },
+      { kind: "model", groupId: "m1", at: 4, activity: "writing" },
+      ...submitted("t1", "m2", "j1", 5),
+    ]);
+    expect(currentActivity(state).map((l) => [l.kind, l.groupId, l.text])).toEqual([
+      ["working", "m2", "Deciding the next step…"],
+      ["working", "m1", "Writing a reply…"],
+      ["waiting", "m1", "approve A"],
+      ["waiting", "m2", "approve B"],
+      ["galaxy", "m2", "Running fastp"],
+    ]);
+    expect(currentStatus(state)).toEqual({ text: "Deciding the next step…", since: 6 });
+  });
+
+  it("is empty when nothing is happening", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 1 },
+    ]);
+    expect(currentActivity(state)).toEqual([]);
+    expect(currentActivity(EMPTY_STATE)).toEqual([]);
   });
 });

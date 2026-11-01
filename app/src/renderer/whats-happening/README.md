@@ -31,7 +31,10 @@ whats-happening/
    …), so groups can run side by side; each ends on its own `group-end`.
 2. Fold them in with `advance(state, event)`, starting from `EMPTY_STATE`.
    It is pure and returns the same state when nothing changed.
-3. Draw `currentStatus(state)` and `state.groups`.
+3. Draw `state.groups` and what is happening now: `currentActivity(state)`
+   lists every group at work, every wait on the user and every piece of
+   Galaxy work still running; `currentStatus(state)` is one line for when
+   there is room for only one.
 4. Send each Galaxy job's and workflow run's state as a `job-state` event,
    from the harness's own poller, so rows stay "running" until Galaxy says
    they are done.

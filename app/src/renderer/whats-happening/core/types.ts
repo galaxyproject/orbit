@@ -166,6 +166,17 @@ export interface NowLine {
   since: number;
 }
 
+/**
+ * One thing happening right now, from `currentActivity()`:
+ * - `working`: a group at work, with its status line ("Thinking…")
+ * - `waiting`: something the harness is waiting on the user for
+ * - `galaxy`: Galaxy work still running, named by the call that started it
+ */
+export type ActivityLine =
+  | (NowLine & { kind: "working"; groupId: string })
+  | (NowLine & { kind: "waiting"; groupId: string; id?: string })
+  | (NowLine & { kind: "galaxy"; groupId?: string; galaxyId?: string });
+
 /** Something the harness is waiting on the user for. */
 export interface WaitingRequest extends NowLine {
   id?: string;

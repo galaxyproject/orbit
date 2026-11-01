@@ -28,6 +28,7 @@ import {
   startedWork,
 } from "./results.js";
 import type {
+  ActivityLine,
   GalaxyRun,
   NameMemory,
   NarrationEntry,
@@ -382,38 +383,68 @@ function applyJobState(
 }
 
 /**
- * The single line to show right now: the active group's status, or else what
- * the user needs to do, or else the Galaxy work still running after its group
- * ended, or nothing when idle.
+ * Everything happening right now: each group at work (newest first), each
+ * request waiting on the user (oldest first), and each piece of Galaxy work
+ * still running. Several can be true at once, e.g. a paused follow-up waiting
+ * on the user while Galaxy keeps running jobs. Empty when idle.
+ */
+export function currentActivity(state: NarrationState): ActivityLine[] {
+  const working: ActivityLine[] = state.groups
+    .flatMap((g) =>
+      g.status === "active" && g.now
+        ? [{ kind: "working" as const, groupId: g.id, text: g.now.text, since: g.now.since }]
+        : [],
+    )
+    .reverse();
+  const waiting: ActivityLine[] = state.groups
+    .flatMap((g) =>
+      (g.waitingFor ?? []).map((r) => ({
+        kind: "waiting" as const,
+        groupId: g.id,
+        text: r.text,
+        since: r.since,
+        ...(r.id ? { id: r.id } : {}),
+      })),
+    )
+    .sort((a, b) => a.since - b.since);
+  const galaxy: ActivityLine[] = state.galaxyRunning.map((w) => {
+    const group = state.groups.find((g) => g.entries.some((e) => e.id === w.id));
+    return {
+      kind: "galaxy",
+      text: w.title,
+      since: w.since,
+      ...(group ? { groupId: group.id } : {}),
+      ...(w.galaxyId ? { galaxyId: w.galaxyId } : {}),
+    };
+  });
+  return [...working, ...waiting, ...galaxy];
+}
+
+/**
+ * The single line to show when there is room for only one: the newest group's
+ * status, or else what the user needs to do, or else the Galaxy work still
+ * running, or nothing when idle. The first of `currentActivity()`, with the
+ * rest of its kind counted.
  */
 export function currentStatus(state: NarrationState): NowLine | null {
-  const active = state.groups[lastIndex(state.groups, (g) => g.status === "active")];
-  if (active?.now) {
-    return active.now;
+  const lines = currentActivity(state);
+  const working = lines.find((l) => l.kind === "working");
+  if (working) {
+    return { text: working.text, since: working.since };
   }
-
-  const waiting = state.groups
-    .filter((g) => g.status === "waiting")
-    .flatMap((g) => g.waitingFor ?? [])
-    .sort((a, b) => a.since - b.since);
-
-  if (waiting.length > 0) {
-    const more = waiting.length - 1;
+  for (const [kind, lead] of [
+    ["waiting", "Waiting for you"],
+    ["galaxy", "Galaxy is still working"],
+  ] as const) {
+    const same = lines.filter((l) => l.kind === kind);
+    if (same.length === 0) continue;
+    const more = same.length - 1;
     return {
-      text: `Waiting for you: ${waiting[0].text}${more > 0 ? ` (+${more} more)` : ""}`,
-      since: waiting[0].since,
+      text: `${lead}: ${same[0].text}${more > 0 ? ` (+${more} more)` : ""}`,
+      since: same[0].since,
     };
   }
-
-  const work = state.galaxyRunning[0];
-  if (!work) {
-    return null;
-  }
-  const more = state.galaxyRunning.length - 1;
-  return {
-    text: `Galaxy is still working: ${work.title}${more > 0 ? ` (+${more} more)` : ""}`,
-    since: work.since,
-  };
+  return null;
 }
 
 /** The group with this id, while it is still at work. */
