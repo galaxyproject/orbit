@@ -1052,6 +1052,20 @@ describe("step 7: why a call failed", () => {
     expect(failureReason("x".repeat(400))?.length).toBe(400);
   });
 
+  it("reads a failure envelope that has no data, as galaxy-ops sends it", () => {
+    const text = JSON.stringify({
+      success: false,
+      message:
+        'Run tool failed: Unexpected HTTP status code: 400: {"err_msg": "Parameter \'lineNum\': the attribute \'value\' must be set for non optional parameters", "err_code": 400008}. Context: …',
+    });
+    expect(failureReason(text)).toBe(
+      "Parameter 'lineNum': the attribute 'value' must be set for non optional parameters",
+    );
+    expect(failureReason(JSON.parse(text))).toBe(
+      "Parameter 'lineNum': the attribute 'value' must be set for non optional parameters",
+    );
+  });
+
   it("has no reason for a success", () => {
     expect(failureReason({ data: {}, success: true, message: "ok" })).toBeUndefined();
   });

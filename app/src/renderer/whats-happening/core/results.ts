@@ -32,7 +32,12 @@ export function envelopeOf(result: unknown): GalaxyResult<unknown> | null {
       return null;
     }
   }
-  if (!isPlainObject(value) || typeof value.success !== "boolean" || !("data" in value)) {
+  // A success carries `data`; a failure may come with only its message.
+  if (
+    !isPlainObject(value) ||
+    typeof value.success !== "boolean" ||
+    (value.success && !("data" in value))
+  ) {
     return null;
   }
   return value as unknown as GalaxyResult<unknown>;
