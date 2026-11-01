@@ -112,7 +112,7 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
         messages: [],
         followUp: false,
         status: "active",
-        now: { text: "Reading your request…", since: event.at },
+        now: { text: "Reading your request…", since: event.at, waitingOn: "assistant" },
         entries: [],
         startedAt: event.at,
       };
@@ -138,13 +138,17 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
           ...(followUpOf.length > 0 ? { followUpOf } : {}),
           now:
             event.followUp && g.now?.text === "Reading your request…"
-              ? { text: "Checking on your Galaxy work…", since: g.now.since }
+              ? {
+                  text: "Checking on your Galaxy work…",
+                  since: g.now.since,
+                  waitingOn: "assistant",
+                }
               : g.now,
         };
       });
     case "model":
       return updateActive(state, event.groupId, (g) =>
-        withNow(g, MODEL_STATUS[event.activity], event.at),
+        withNow(g, { text: MODEL_STATUS[event.activity], since: event.at, waitingOn: "assistant" }),
       );
     case "group-end":
       return updateActive(state, event.groupId, (g) =>
@@ -238,19 +242,21 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
     const entry = entries.find((e) => e.id === event.id);
     const stillRunning = lastOf(entries, (e) => e.status === "running" && !e.startedRuns);
     let now: NowLine | null = null;
-    if (event.phase === "start") {
+    if (event.phase === "start" && entry) {
       // A call started: say what it is doing.
-      now = { text: `${entry?.title ?? event.toolName}…`, since: event.at };
+      now = { text: `${entry.title}…`, since: event.at, waitingOn: waitingOnCall(entry) };
     } else if (event.phase === "end" && stillRunning) {
       // A call ended while another is still running: back to that one, with its own timer.
-      now = { text: `${stillRunning.title}…`, since: stillRunning.startedAt };
+      now = {
+        text: `${stillRunning.title}…`,
+        since: stillRunning.startedAt,
+        waitingOn: waitingOnCall(stillRunning),
+      };
     } else if (event.phase === "end") {
       // The last running call ended: the model picks what to do next.
-      now = { text: "Deciding the next step…", since: event.at };
+      now = { text: "Deciding the next step…", since: event.at, waitingOn: "assistant" };
     }
-    return now && g.status === "active"
-      ? withNow({ ...g, entries }, now.text, now.since)
-      : { ...g, entries };
+    return now && g.status === "active" ? withNow({ ...g, entries }, now) : { ...g, entries };
   });
   // A call can return without an error yet carry a failed envelope: nothing was started then.
   const refused = event.phase === "end" && envelopeOf(event.result)?.success === false;
@@ -492,9 +498,7 @@ function applyJobState(
 export function currentActivity(state: NarrationState): ActivityLine[] {
   const working: ActivityLine[] = state.groups
     .flatMap((g) =>
-      g.status === "active" && g.now
-        ? [{ kind: "working" as const, groupId: g.id, text: g.now.text, since: g.now.since }]
-        : [],
+      g.status === "active" && g.now ? [{ kind: "working" as const, groupId: g.id, ...g.now }] : [],
     )
     .reverse();
   const waiting: ActivityLine[] = state.groups
@@ -531,7 +535,8 @@ export function currentStatus(state: NarrationState): NowLine | null {
   const lines = currentActivity(state);
   const working = lines.find((l) => l.kind === "working");
   if (working) {
-    return { text: working.text, since: working.since };
+    const { kind: _kind, groupId: _groupId, ...line } = working;
+    return line;
   }
   for (const [kind, lead] of [
     ["waiting", "Waiting for you"],
@@ -546,6 +551,32 @@ export function currentStatus(state: NarrationState): NowLine | null {
     };
   }
   return null;
+}
+
+/**
+ * How long a status line can go unchanged before a view says the wait is
+ * long: a suggestion, since the core keeps no clock and the view times it.
+ */
+export const STALL_AFTER_MS = 30_000;
+
+/** Whether nothing has happened under a status line for `after` milliseconds, at `now`. */
+export function isStalled(line: NowLine, now: number, after = STALL_AFTER_MS): boolean {
+  return now - (line.activeAt ?? line.since) > after;
+}
+
+/**
+ * What to say instead of a status line that has gone unchanged for a while
+ * (see `STALL_AFTER_MS`), by what it is waiting on. The assistant is named
+ * when the harness gives a name, e.g. "Orbit is still working on it…".
+ */
+export function stallText(
+  line: Pick<NowLine, "waitingOn">,
+  options: { assistantName?: string } = {},
+): string {
+  if (line.waitingOn === "galaxy") return "Galaxy is taking a while to answer…";
+  return options.assistantName
+    ? `${options.assistantName} is still working on it…`
+    : "Still working on it…";
 }
 
 /** The group with this id, while it is still at work. */
@@ -646,10 +677,21 @@ function close(group: NarrationGroup, at: number): NarrationGroup {
   return { ...group, status: waiting ? "waiting" : "done", now: null, endedAt: at };
 }
 
-/** Sets the status line, keeping `since` (and the same object) when the text hasn't changed. */
-function withNow(group: NarrationGroup, text: string, at: number): NarrationGroup {
-  if (group.now?.text === text) return group;
-  return { ...group, now: { text, since: at } };
+/**
+ * Sets the status line. When the text hasn't changed it keeps `since` and only
+ * notes that something happened (`activeAt`), at most once a second, so a
+ * streaming reply doesn't count as a long wait or redraw on every token.
+ */
+function withNow(group: NarrationGroup, line: NowLine): NarrationGroup {
+  const current = group.now;
+  if (current?.text !== line.text) return { ...group, now: line };
+  if (line.since - (current.activeAt ?? current.since) < 1000) return group;
+  return { ...group, now: { ...current, activeAt: line.since } };
+}
+
+/** Who a running call is waiting on: Galaxy for a Galaxy tool, else the harness's own tool. */
+function waitingOnCall(entry: NarrationEntry): NonNullable<NowLine["waitingOn"]> {
+  return entry.kind === "internal" ? "harness" : "galaxy";
 }
 
 /** What galaxy-ops says about the operation behind a tool, for the entry. */

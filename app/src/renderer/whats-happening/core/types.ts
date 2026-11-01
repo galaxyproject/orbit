@@ -196,6 +196,18 @@ export type NarrationEvent = ToolEvent | LifecycleEvent;
 export interface NowLine {
   text: string;
   since: number;
+  /**
+   * What the line is waiting on, so a view can say who is slow when nothing
+   * has happened for a while: the assistant's own reply, a Galaxy call, or
+   * one of the harness's own tools (notes, files, web pages).
+   */
+  waitingOn?: "assistant" | "galaxy" | "harness";
+  /**
+   * When something last happened under this line (the model streaming more of
+   * its reply, say), if anything has since it was set; a long wait is measured
+   * from here, not from `since`.
+   */
+  activeAt?: number;
 }
 
 /**

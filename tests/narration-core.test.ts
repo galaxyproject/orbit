@@ -25,7 +25,9 @@ import {
   currentStatus,
   groupsForUserMessage,
   EMPTY_STATE,
+  isStalled,
   narrate,
+  stallText,
 } from "../app/src/renderer/whats-happening/core/narrator.js";
 import type {
   NarrationEntry,
@@ -229,7 +231,11 @@ describe("advance: groups and the live status line", () => {
     const state = play([{ kind: "group-start", groupId: "m1", at: 0 }]);
     expect(state.groups).toHaveLength(1);
     expect(state.groups[0].status).toBe("active");
-    expect(currentStatus(state)).toEqual({ text: "Reading your request…", since: 0 });
+    expect(currentStatus(state)).toEqual({
+      text: "Reading your request…",
+      since: 0,
+      waitingOn: "assistant",
+    });
   });
 
   it("follows the model through thinking, a tool call and its reply", () => {
@@ -1467,7 +1473,11 @@ describe("calls running side by side in one group", () => {
       call("d", "get_dataset_details", "start", 2),
       call("d", "get_dataset_details", "end", 3),
     ]);
-    expect(currentStatus(state)).toEqual({ text: "Looking at your history…", since: 1 });
+    expect(currentStatus(state)).toEqual({
+      text: "Looking at your history…",
+      since: 1,
+      waitingOn: "galaxy",
+    });
   });
 
   it("says it is deciding the next step only once no call is left running", () => {
@@ -1478,7 +1488,11 @@ describe("calls running side by side in one group", () => {
       call("d", "get_dataset_details", "end", 3),
       call("h", "get_history_contents", "end", 4),
     ]);
-    expect(currentStatus(state)).toEqual({ text: "Deciding the next step…", since: 4 });
+    expect(currentStatus(state)).toEqual({
+      text: "Deciding the next step…",
+      since: 4,
+      waitingOn: "assistant",
+    });
   });
 
   it("doesn't count a call whose Galaxy job is still running as a call still running", () => {
@@ -1541,7 +1555,11 @@ describe("everything happening now", () => {
       ["waiting", "m2", "approve B"],
       ["galaxy", "m2", "Running fastp"],
     ]);
-    expect(currentStatus(state)).toEqual({ text: "Deciding the next step…", since: 6 });
+    expect(currentStatus(state)).toEqual({
+      text: "Deciding the next step…",
+      since: 6,
+      waitingOn: "assistant",
+    });
   });
 
   it("is empty when nothing is happening", () => {
@@ -2044,5 +2062,60 @@ describe("workflow runs, step by step", () => {
       status: "failed",
       detail: "The workflow run failed at step 4 (First Select (2))",
     });
+  });
+});
+
+describe("long waits", () => {
+  it("tags each status line with what it waits on", () => {
+    const at = (events: NarrationEvent[]) =>
+      currentStatus(play([{ kind: "group-start", groupId: "m1", at: 0 }, ...events]))?.waitingOn;
+    expect(at([])).toBe("assistant");
+    expect(at([{ kind: "model", groupId: "m1", at: 1, activity: "thinking" }])).toBe("assistant");
+    expect(at([{ id: "a", toolName: "get_histories", phase: "start", groupId: "m1", at: 1 }])).toBe(
+      "galaxy",
+    );
+    expect(at([{ id: "a", toolName: "fetch_content", phase: "start", groupId: "m1", at: 1 }])).toBe(
+      "harness",
+    );
+  });
+
+  it("counts a long wait from the last thing that happened, so a streaming reply never stalls", () => {
+    const writing = (at: number): NarrationEvent => ({
+      kind: "model",
+      groupId: "m1",
+      at,
+      activity: "writing",
+    });
+    const streaming = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      ...[1_000, 1_500, 20_000, 39_000].map(writing),
+    ]);
+    const line = currentStatus(streaming)!;
+    expect(line).toMatchObject({ text: "Writing a reply…", since: 1_000, activeAt: 39_000 });
+    expect(isStalled(line, 45_000)).toBe(false);
+    expect(isStalled(line, 70_000)).toBe(true);
+    // Repeats within a second change nothing, so a view needn't redraw on every token.
+    expect(advance(streaming, writing(39_500))).toBe(streaming);
+  });
+
+  it("calls a Galaxy call that has sent nothing for a while stalled", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "a", toolName: "get_history_contents", phase: "start", groupId: "m1", at: 1_000 },
+    ]);
+    const line = currentStatus(state)!;
+    expect(isStalled(line, 20_000)).toBe(false);
+    expect(isStalled(line, 40_000)).toBe(true);
+    expect(stallText(line)).toBe("Galaxy is taking a while to answer…");
+  });
+
+  it("says who is slow, naming the assistant only when the harness gives a name", () => {
+    expect(stallText({ waitingOn: "assistant" })).toBe("Still working on it…");
+    expect(stallText({ waitingOn: "harness" }, { assistantName: "Orbit" })).toBe(
+      "Orbit is still working on it…",
+    );
+    expect(stallText({ waitingOn: "galaxy" }, { assistantName: "Orbit" })).toBe(
+      "Galaxy is taking a while to answer…",
+    );
   });
 });
