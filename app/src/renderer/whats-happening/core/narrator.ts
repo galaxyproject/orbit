@@ -212,14 +212,20 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
       entries = entries.map((e) => (e.id === event.id ? finishEntry(e, event) : e));
     }
     const entry = entries.find((e) => e.id === event.id);
-    const now =
-      event.phase === "start"
-        ? `${entry?.title ?? event.toolName}…`
-        : event.phase === "end"
-          ? "Deciding the next step…"
-          : null;
+    const stillRunning = lastOf(entries, (e) => e.status === "running" && !e.galaxy);
+    let now: NowLine | null = null;
+    if (event.phase === "start") {
+      // A call started: say what it is doing.
+      now = { text: `${entry?.title ?? event.toolName}…`, since: event.at };
+    } else if (event.phase === "end" && stillRunning) {
+      // A call ended while another is still running: back to that one, with its own timer.
+      now = { text: `${stillRunning.title}…`, since: stillRunning.startedAt };
+    } else if (event.phase === "end") {
+      // The last running call ended: the model picks what to do next.
+      now = { text: "Deciding the next step…", since: event.at };
+    }
     return now && g.status === "active"
-      ? withNow({ ...g, entries }, now, event.at)
+      ? withNow({ ...g, entries }, now.text, now.since)
       : { ...g, entries };
   });
   // A call can return without an error yet carry a failed envelope: nothing was started then.
@@ -454,6 +460,10 @@ function activeGroup(state: NarrationState, id: string): NarrationGroup | undefi
 
 function activeIndex(state: NarrationState, id: string): number {
   return lastIndex(state.groups, (g) => g.status === "active" && g.id === id);
+}
+
+function lastOf<T>(items: readonly T[], match: (item: T) => boolean): T | undefined {
+  return items[lastIndex(items, match)];
 }
 
 function lastIndex<T>(items: readonly T[], match: (item: T) => boolean): number {

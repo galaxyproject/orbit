@@ -1415,6 +1415,50 @@ describe("step 12a: groups side by side", () => {
   });
 });
 
+describe("calls running side by side in one group", () => {
+  const call = (id: string, toolName: string, phase: "start" | "end", at: number): ToolEvent => ({
+    id,
+    toolName,
+    phase,
+    groupId: "m1",
+    at,
+  });
+
+  it("goes back to a call still running when another ends, with its own timer", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      call("h", "get_history_contents", "start", 1),
+      call("d", "get_dataset_details", "start", 2),
+      call("d", "get_dataset_details", "end", 3),
+    ]);
+    expect(currentStatus(state)).toEqual({ text: "Looking at your history…", since: 1 });
+  });
+
+  it("says it is deciding the next step only once no call is left running", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      call("h", "get_history_contents", "start", 1),
+      call("d", "get_dataset_details", "start", 2),
+      call("d", "get_dataset_details", "end", 3),
+      call("h", "get_history_contents", "end", 4),
+    ]);
+    expect(currentStatus(state)).toEqual({ text: "Deciding the next step…", since: 4 });
+  });
+
+  it("doesn't count a call whose Galaxy job is still running as a call still running", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { ...call("r", "run_tool", "start", 1), args: { tool_id: "fastp" } },
+      {
+        ...call("r", "run_tool", "end", 2),
+        result: { data: { jobs: [{ id: "j1", state: "queued" }] }, success: true },
+      },
+    ]);
+    expect(state.groups[0].entries[0].status).toBe("running");
+    expect(currentStatus(state)?.text).toBe("Deciding the next step…");
+  });
+});
+
 describe("everything happening now", () => {
   const submitted = (id: string, groupId: string, jobId: string, at: number): ToolEvent[] => [
     { id, toolName: "run_tool", phase: "start", groupId, at, args: { tool_id: "fastp" } },
