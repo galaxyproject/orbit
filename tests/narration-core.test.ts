@@ -32,6 +32,7 @@ const start = (id: string, at = 1000): ToolEvent => ({
   id,
   toolName: "galaxy_run_tool",
   phase: "start",
+  groupId: "m1",
   at,
   args: { tool_id: "__BUILD_LIST__" },
 });
@@ -40,6 +41,7 @@ const end = (id: string, at = 2000, isError = false): ToolEvent => ({
   id,
   toolName: "galaxy_run_tool",
   phase: "end",
+  groupId: "m1",
   at,
   isError,
 });
@@ -98,7 +100,13 @@ describe("narrate", () => {
   it("returns the same list for update events", () => {
     const before = fold([start("a")]);
     expect(
-      narrate(before, { id: "a", toolName: "galaxy_run_tool", phase: "update", at: 1500 }),
+      narrate(before, {
+        id: "a",
+        toolName: "galaxy_run_tool",
+        phase: "update",
+        groupId: "m1",
+        at: 1500,
+      }),
     ).toBe(before);
   });
 
@@ -202,6 +210,7 @@ const runTool = (id: string, phase: "start" | "end", at: number, isError = false
   id,
   toolName: "mcp__galaxy__run_tool",
   phase,
+  groupId: "m1",
   at,
   args: { tool_id: "random_lines1" },
   isError,
@@ -209,7 +218,7 @@ const runTool = (id: string, phase: "start" | "end", at: number, isError = false
 
 describe("advance: groups and the live status line", () => {
   it("opens a group per message and shows a status straight away", () => {
-    const state = play([{ kind: "group-start", at: 0 }]);
+    const state = play([{ kind: "group-start", groupId: "m1", at: 0 }]);
     expect(state.groups).toHaveLength(1);
     expect(state.groups[0].status).toBe("active");
     expect(currentStatus(state)).toEqual({ text: "Reading your request…", since: 0 });
@@ -217,12 +226,12 @@ describe("advance: groups and the live status line", () => {
 
   it("follows the model through thinking, a tool call and its reply", () => {
     const steps: [NarrationEvent, string][] = [
-      [{ kind: "group-start", at: 0 }, "Reading your request…"],
-      [{ kind: "model", activity: "thinking", at: 1 }, "Thinking…"],
-      [{ kind: "model", activity: "tool-call", at: 12 }, "Preparing the next step…"],
+      [{ kind: "group-start", groupId: "m1", at: 0 }, "Reading your request…"],
+      [{ kind: "model", groupId: "m1", activity: "thinking", at: 1 }, "Thinking…"],
+      [{ kind: "model", groupId: "m1", activity: "tool-call", at: 12 }, "Preparing the next step…"],
       [runTool("t1", "start", 13), "Running random_lines1…"],
       [runTool("t1", "end", 15), "Deciding the next step…"],
-      [{ kind: "model", activity: "writing", at: 16 }, "Writing a reply…"],
+      [{ kind: "model", groupId: "m1", activity: "writing", at: 16 }, "Writing a reply…"],
     ];
     let state = EMPTY_STATE;
     for (const [event, expected] of steps) {
@@ -233,22 +242,24 @@ describe("advance: groups and the live status line", () => {
 
   it("keeps the same state while the same activity keeps streaming", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "model", activity: "thinking", at: 1 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "model", groupId: "m1", activity: "thinking", at: 1 },
     ]);
-    expect(advance(state, { kind: "model", activity: "thinking", at: 5 })).toBe(state);
+    expect(advance(state, { kind: "model", groupId: "m1", activity: "thinking", at: 5 })).toBe(
+      state,
+    );
     expect(currentStatus(state)?.since).toBe(1);
   });
 
   it("closes the group on group-end, and records why when it stopped", () => {
     const done = play([
-      { kind: "group-start", at: 0 },
-      { kind: "group-end", at: 17 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 17 },
     ]);
     expect(done.groups[0]).toMatchObject({ status: "done", now: null, endedAt: 17 });
     const stopped = play([
-      { kind: "group-start", at: 0 },
-      { kind: "group-end", at: 3, error: "model unavailable" },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 3, error: "model unavailable" },
     ]);
     expect(stopped.groups[0]).toMatchObject({ status: "stopped", error: "model unavailable" });
   });
@@ -256,18 +267,18 @@ describe("advance: groups and the live status line", () => {
   it("keeps a stop reason whole, as the harness gave it", () => {
     const long = `ContextWindowExceededError: ${"x".repeat(300)}\n{"detail": "…"}`;
     const stopped = play([
-      { kind: "group-start", at: 0 },
-      { kind: "group-end", at: 3, error: long },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 3, error: long },
     ]);
     expect(stopped.groups[0].error).toBe(long);
   });
 
   it("keeps saying Galaxy is working after the group ends, until it reports finished", () => {
     const afterTurn = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       runTool("t1", "start", 13),
       runTool("t1", "end", 15),
-      { kind: "group-end", at: 17 },
+      { kind: "group-end", groupId: "m1", at: 17 },
     ]);
     expect(currentStatus(afterTurn)).toEqual({
       text: "Galaxy is still working: Running random_lines1",
@@ -283,12 +294,12 @@ describe("advance: groups and the live status line", () => {
 
   it("does not count failed or non-Galaxy calls as running Galaxy work", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       runTool("t1", "start", 1),
       runTool("t1", "end", 2, true),
-      { id: "e1", toolName: "edit", phase: "start", at: 3 },
-      { id: "e1", toolName: "edit", phase: "end", at: 4 },
-      { kind: "group-end", at: 5 },
+      { id: "e1", toolName: "edit", phase: "start", groupId: "m1", at: 3 },
+      { id: "e1", toolName: "edit", phase: "end", groupId: "m1", at: 4 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     expect(state.galaxyRunning).toEqual([]);
     expect(currentStatus(state)).toBeNull();
@@ -296,29 +307,33 @@ describe("advance: groups and the live status line", () => {
 
   it("does not wait on an upload that finished before its call returned", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { id: "u1", toolName: "galaxy_upload_local_file", phase: "start", at: 1 },
-      { id: "u1", toolName: "galaxy_upload_local_file", phase: "end", at: 2 },
-      { kind: "group-end", at: 3 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "u1", toolName: "galaxy_upload_local_file", phase: "start", groupId: "m1", at: 1 },
+      { id: "u1", toolName: "galaxy_upload_local_file", phase: "end", groupId: "m1", at: 2 },
+      { kind: "group-end", groupId: "m1", at: 3 },
     ]);
     expect(currentStatus(state)).toBeNull();
   });
 
   it("marks a group the harness started itself as a follow-up", () => {
     const state = play([
-      { kind: "group-start", at: 36 },
-      { kind: "group-info", at: 36, text: "[auto] check the job", followUp: true },
+      { kind: "group-start", groupId: "m1", at: 36 },
+      { kind: "group-info", groupId: "m1", at: 36, text: "[auto] check the job", followUp: true },
     ]);
     expect(state.groups[0]).toMatchObject({ followUp: true, text: "[auto] check the job" });
     expect(currentStatus(state)?.text).toBe("Checking on your Galaxy work…");
   });
 
-  it("starts a new group for each message and closes one left open", () => {
+  it("starts a new group for each message, the last one ended by its own group-end", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "group-start", at: 10 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 9 },
+      { kind: "group-start", groupId: "m2", at: 10 },
     ]);
-    expect(state.groups.map((g) => g.status)).toEqual(["done", "active"]);
+    expect(state.groups.map((g) => [g.id, g.status])).toEqual([
+      ["m1", "done"],
+      ["m2", "active"],
+    ]);
   });
 
   it("opens a group for a tool call that arrives outside one", () => {
@@ -329,14 +344,19 @@ describe("advance: groups and the live status line", () => {
 });
 
 describe("advance: waiting on the user", () => {
-  const asked: NarrationEvent = { kind: "awaiting-user", at: 4, text: "approve the run" };
+  const asked: NarrationEvent = {
+    kind: "awaiting-user",
+    groupId: "m1",
+    at: 4,
+    text: "approve the run",
+  };
 
   it("ends a group that left the user something to do as waiting, not done", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       asked,
-      { kind: "model", activity: "writing", at: 5 },
-      { kind: "group-end", at: 9 },
+      { kind: "model", groupId: "m1", activity: "writing", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 9 },
     ]);
     expect(state.groups[0]).toMatchObject({
       status: "waiting",
@@ -347,48 +367,61 @@ describe("advance: waiting on the user", () => {
 
   it("keeps the live status line while the group is still working", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       asked,
-      { kind: "model", activity: "writing", at: 5 },
+      { kind: "model", groupId: "m1", activity: "writing", at: 5 },
     ]);
     expect(currentStatus(state)?.text).toBe("Writing a reply…");
   });
 
   it("also marks a group that has already ended", () => {
-    const state = play([{ kind: "group-start", at: 0 }, { kind: "group-end", at: 3 }, asked]);
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 3 },
+      asked,
+    ]);
     expect(state.groups[0].status).toBe("waiting");
   });
 
   it("puts the user's action ahead of Galaxy work still running", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       runTool("t1", "start", 1),
       runTool("t1", "end", 2),
       asked,
-      { kind: "group-end", at: 9 },
+      { kind: "group-end", groupId: "m1", at: 9 },
     ]);
     expect(currentStatus(state)?.text).toBe("Waiting for you: approve the run");
   });
 
   it("clears the wait once the user replies, even without a new group", () => {
-    const waiting = play([{ kind: "group-start", at: 0 }, asked, { kind: "group-end", at: 9 }]);
+    const waiting = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      asked,
+      { kind: "group-end", groupId: "m1", at: 9 },
+    ]);
     const replied = advance(waiting, { kind: "user-replied", at: 20 });
     expect(replied.groups[0].status).toBe("done");
     expect(replied.groups[0].waitingFor).toBeUndefined();
     expect(currentStatus(replied)).toBeNull();
   });
 
-  it("closes a waiting group left open by the next message as waiting", () => {
-    const state = play([{ kind: "group-start", at: 0 }, asked, { kind: "group-start", at: 10 }]);
+  it("leaves a group that ended with a request waiting while the next message runs", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      asked,
+      { kind: "group-end", groupId: "m1", at: 9 },
+      { kind: "group-start", groupId: "m2", at: 10 },
+    ]);
     expect(state.groups.map((g) => g.status)).toEqual(["waiting", "active"]);
   });
 
   it("keeps several requests at once and shows the oldest, with a count", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
-      { kind: "awaiting-user", at: 6, text: "approve run B", id: "b" },
-      { kind: "group-end", at: 9 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", groupId: "m1", at: 6, text: "approve run B", id: "b" },
+      { kind: "group-end", groupId: "m1", at: 9 },
     ]);
     expect(state.groups[0].waitingFor?.map((r) => r.id)).toEqual(["a", "b"]);
     expect(currentStatus(state)).toEqual({
@@ -399,10 +432,10 @@ describe("advance: waiting on the user", () => {
 
   it("answers only the request a reply names, and stays waiting for the rest", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
-      { kind: "awaiting-user", at: 6, text: "approve run B", id: "b" },
-      { kind: "group-end", at: 9 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", groupId: "m1", at: 6, text: "approve run B", id: "b" },
+      { kind: "group-end", groupId: "m1", at: 9 },
       { kind: "user-replied", at: 12, id: "a" },
     ]);
     expect(state.groups[0].status).toBe("waiting");
@@ -414,10 +447,10 @@ describe("advance: waiting on the user", () => {
 
   it("answers everything pending when a reply names no request", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
-      { kind: "awaiting-user", at: 6, text: "approve run B" },
-      { kind: "group-end", at: 9 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", groupId: "m1", at: 6, text: "approve run B" },
+      { kind: "group-end", groupId: "m1", at: 9 },
       { kind: "user-replied", at: 12 },
     ]);
     expect(state.groups[0].status).toBe("done");
@@ -426,19 +459,19 @@ describe("advance: waiting on the user", () => {
 
   it("ignores a reply to a request that isn't pending", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
-      { kind: "group-end", at: 9 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 4, text: "approve run A", id: "a" },
+      { kind: "group-end", groupId: "m1", at: 9 },
     ]);
     expect(advance(state, { kind: "user-replied", at: 12, id: "zzz" })).toBe(state);
   });
 
   it("updates a request asked again under the same id, keeping its age", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 4, text: "approve run A", id: "a" },
-      { kind: "awaiting-user", at: 7, text: "approve run A (edited)", id: "a" },
-      { kind: "group-end", at: 9 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 4, text: "approve run A", id: "a" },
+      { kind: "awaiting-user", groupId: "m1", at: 7, text: "approve run A (edited)", id: "a" },
+      { kind: "group-end", groupId: "m1", at: 9 },
     ]);
     expect(state.groups[0].waitingFor).toEqual([
       { text: "approve run A (edited)", since: 4, id: "a" },
@@ -447,20 +480,20 @@ describe("advance: waiting on the user", () => {
 
   it("collects requests from several messages, oldest first", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "awaiting-user", at: 2, text: "approve run A", id: "a" },
-      { kind: "group-end", at: 3 },
-      { kind: "group-start", at: 10 },
-      { kind: "awaiting-user", at: 12, text: "approve run B", id: "b" },
-      { kind: "group-end", at: 13 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "awaiting-user", groupId: "m1", at: 2, text: "approve run A", id: "a" },
+      { kind: "group-end", groupId: "m1", at: 3 },
+      { kind: "group-start", groupId: "m2", at: 10 },
+      { kind: "awaiting-user", groupId: "m2", at: 12, text: "approve run B", id: "b" },
+      { kind: "group-end", groupId: "m2", at: 13 },
     ]);
     expect(currentStatus(state)?.text).toBe("Waiting for you: approve run A (+1 more)");
   });
 
   it("changes nothing when the user replies with nothing to answer", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { kind: "group-end", at: 3 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { kind: "group-end", groupId: "m1", at: 3 },
     ]);
     expect(advance(state, { kind: "user-replied", at: 5 })).toBe(state);
   });
@@ -521,9 +554,9 @@ describe("classifyTool", () => {
 describe("narrate: galaxy-ops facts on entries", () => {
   it("records the operation's domain, and flags destructive ones", () => {
     const entries = fold([
-      { id: "c", toolName: "cancel_workflow_invocation", phase: "start", at: 1 },
-      { id: "h", toolName: "get_history_contents", phase: "start", at: 2 },
-      { id: "e", toolName: "edit", phase: "start", at: 3 },
+      { id: "c", toolName: "cancel_workflow_invocation", phase: "start", groupId: "m1", at: 1 },
+      { id: "h", toolName: "get_history_contents", phase: "start", groupId: "m1", at: 2 },
+      { id: "e", toolName: "edit", phase: "start", groupId: "m1", at: 3 },
     ]);
     expect(entries.map((e) => [e.domain, e.destructive])).toEqual([
       ["invocations", true],
@@ -573,6 +606,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
     id,
     toolName: "run_tool",
     phase: "end",
+    groupId: "m1",
     at,
     result: { data: { jobs }, success: true },
   });
@@ -580,16 +614,17 @@ describe("advance: rows follow their Galaxy jobs", () => {
     id,
     toolName: "run_tool",
     phase: "start",
+    groupId: "m1",
     at,
     args: { tool_id: "fasterq_dump" },
   });
 
   it("keeps a row running after the call returns, until Galaxy finishes the job", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "queued" }]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     const [entry] = state.groups[0].entries;
     expect(entry.status).toBe("running");
@@ -606,7 +641,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("marks the row failed when its job fails", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "queued" }]),
       { kind: "job-state", at: 30, id: "j1", state: "error" },
@@ -620,7 +655,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("says how many of a call's jobs failed, and when they were cancelled instead", () => {
     const three = [
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [
         { id: "j1", state: "queued" },
@@ -653,12 +688,13 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("says a workflow run failed", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { id: "w1", toolName: "invoke_workflow", phase: "start", at: 1 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "w1", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1 },
       {
         id: "w1",
         toolName: "invoke_workflow",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: { id: "i1", state: "new" }, success: true },
       },
@@ -673,25 +709,25 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("waits for every job a call started, and counts the rest", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [
         { id: "j1", state: "queued" },
         { id: "j2", state: "queued" },
       ]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
       { kind: "job-state", at: 20, id: "j1", state: "ok" },
     ]);
     expect(state.groups[0].entries[0].status).toBe("running");
     expect(currentStatus(state)?.text).toBe("Galaxy is still working: Running fasterq_dump");
     const both = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [
         { id: "j1", state: "queued" },
         { id: "j2", state: "queued" },
       ]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     expect(currentStatus(both)?.text).toBe(
       "Galaxy is still working: Running fasterq_dump (+1 more)",
@@ -700,11 +736,11 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("lets go of a job the harness stopped tracking, as untracked rather than done or failed", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "queued" }]),
       { kind: "job-state", at: 7, id: "j1", state: "running" },
-      { kind: "group-end", at: 8 },
+      { kind: "group-end", groupId: "m1", at: 8 },
       { kind: "job-state", at: 9, id: "j1", state: "untracked" },
     ]);
     const [entry] = state.groups[0].entries;
@@ -717,7 +753,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("calls a row failed, not untracked, when another of its jobs failed", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [
         { id: "j1", state: "queued" },
@@ -731,13 +767,13 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("keeps a row running while another of its jobs is still going", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [
         { id: "j1", state: "queued" },
         { id: "j2", state: "queued" },
       ]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
       { kind: "job-state", at: 9, id: "j1", state: "untracked" },
     ]);
     expect(state.groups[0].entries[0].status).toBe("running");
@@ -746,12 +782,13 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("finishes a row when its workflow invocation completes", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
-      { id: "w1", toolName: "invoke_workflow", phase: "start", at: 1 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "w1", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1 },
       {
         id: "w1",
         toolName: "invoke_workflow",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: { id: "i1", state: "new" }, success: true },
       },
@@ -768,6 +805,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
         id: "u1",
         toolName: "upload_file_from_url",
         phase: "start",
+        groupId: "m1",
         at: 1,
         args: { url: "https://x.org/a/genome.fna.gz" },
       },
@@ -775,6 +813,7 @@ describe("advance: rows follow their Galaxy jobs", () => {
         id: "u1",
         toolName: "upload_file_from_url",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: {
           data: {
@@ -786,9 +825,9 @@ describe("advance: rows follow their Galaxy jobs", () => {
       },
     ];
     const accepted = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       ...upload("queued"),
-      { kind: "group-end", at: 3 },
+      { kind: "group-end", groupId: "m1", at: 3 },
     ]);
     expect(accepted.groups[0].entries[0].status).toBe("running");
     expect(currentStatus(accepted)?.text).toBe("Galaxy is still working: Uploading genome.fna.gz");
@@ -801,16 +840,16 @@ describe("advance: rows follow their Galaxy jobs", () => {
     });
     expect(currentStatus(failed)).toBeNull();
 
-    const ok = play([{ kind: "group-start", at: 0 }, ...upload("ok")]);
+    const ok = play([{ kind: "group-start", groupId: "m1", at: 0 }, ...upload("ok")]);
     expect(ok.groups[0].entries[0].status).toBe("done");
   });
 
   it("marks a job already finished when submitted as done straight away", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "ok" }]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     expect(state.groups[0].entries[0].status).toBe("done");
     expect(currentStatus(state)).toBeNull();
@@ -818,26 +857,27 @@ describe("advance: rows follow their Galaxy jobs", () => {
 
   it("tracks nothing when the call's envelope says it failed", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       {
         id: "t1",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: null, success: false, message: "bad inputs" },
       },
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     expect(state.galaxyRunning).toEqual([]);
   });
 
   it("ignores a state for a job it doesn't know, and loose reports for jobs it tracks by id", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       started("t1"),
       submitted("t1", [{ id: "j1", state: "queued" }]),
-      { kind: "group-end", at: 5 },
+      { kind: "group-end", groupId: "m1", at: 5 },
     ]);
     expect(advance(state, { kind: "job-state", at: 9, id: "zzz", state: "ok" })).toBe(state);
     expect(advance(state, { kind: "galaxy-finished", at: 9, label: "fasterq_dump" })).toBe(state);
@@ -858,8 +898,15 @@ describe("done titles", () => {
 
   it("puts the done title on reads and on changes with words of their own", () => {
     const entries = fold([
-      { id: "h", toolName: "get_history_contents", phase: "start", at: 1 },
-      { id: "r", toolName: "run_tool", phase: "start", at: 2, args: { tool_id: "cat1" } },
+      { id: "h", toolName: "get_history_contents", phase: "start", groupId: "m1", at: 1 },
+      {
+        id: "r",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 2,
+        args: { tool_id: "cat1" },
+      },
     ]);
     expect(entries.map((e) => [e.title, e.doneTitle])).toEqual([
       ["Looking at your history", "Looked at your history"],
@@ -997,12 +1044,20 @@ describe("step 7: why a call failed", () => {
 describe("step 7: finished entries carry what happened", () => {
   it("puts links and a produced line on a successful tool run", () => {
     const entries = play([
-      { kind: "group-start", at: 0 },
-      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 1,
+        args: { tool_id: "cat1" },
+      },
       {
         id: "t",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: { outputs: [{ id: "d1", hid: 7, name: "out" }], jobs: [] }, success: true },
       },
@@ -1016,12 +1071,20 @@ describe("step 7: finished entries carry what happened", () => {
 
   it("marks a call failed when its envelope says so, even if the harness didn't, with the reason", () => {
     const entries = play([
-      { kind: "group-start", at: 0 },
-      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 1,
+        args: { tool_id: "cat1" },
+      },
       {
         id: "t",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: null, success: false, message: "Tool cat1 not found" },
       },
@@ -1033,12 +1096,20 @@ describe("step 7: finished entries carry what happened", () => {
     const message =
       'Error calling tool \'run_tool\': 400: {"err_msg": "Parameter \'input1\' is required", "err_code": 400008}\ntraceback …';
     const entries = play([
-      { kind: "group-start", at: 0 },
-      { id: "t", toolName: "run_tool", phase: "start", at: 1, args: { tool_id: "cat1" } },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 1,
+        args: { tool_id: "cat1" },
+      },
       {
         id: "t",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: { data: null, success: false, message },
       },
@@ -1051,12 +1122,13 @@ describe("step 7: finished entries carry what happened", () => {
 
   it("gives a reason for a call the harness flagged as an error", () => {
     const entries = play([
-      { kind: "group-start", at: 0 },
-      { id: "t", toolName: "run_tool", phase: "start", at: 1 },
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "t", toolName: "run_tool", phase: "start", groupId: "m1", at: 1 },
       {
         id: "t",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         isError: true,
         result: "Galaxy timed out",
@@ -1072,6 +1144,7 @@ describe("step 8: name memory", () => {
     id,
     toolName,
     phase: "end",
+    groupId: "m1",
     at,
     result,
   });
@@ -1079,6 +1152,7 @@ describe("step 8: name memory", () => {
     id,
     toolName,
     phase: "start",
+    groupId: "m1",
     at,
     args,
   });
@@ -1144,7 +1218,7 @@ describe("step 8: name memory", () => {
 
   it("titles a later tool run with the tool's name and its input's name and history item index", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       start("a", "get_tool_details", { tool_id: "random_lines1" }),
       end("a", "get_tool_details", ok({ id: "random_lines1", name: "Select random lines" })),
       start("b", "get_history_contents", { history_id: "h1" }),
@@ -1226,11 +1300,12 @@ describe("input refs: the id always travels with the history item index", () => 
 
   it("puts a tool run's inputs on its entry, then adds what it produced", () => {
     const state = play([
-      { kind: "group-start", at: 0 },
+      { kind: "group-start", groupId: "m1", at: 0 },
       {
         id: "t",
         toolName: "run_tool",
         phase: "start",
+        groupId: "m1",
         at: 1,
         args: { tool_id: "cat1", inputs: { input1: { src: "hda", id: "d4" } } },
       },
@@ -1238,6 +1313,7 @@ describe("input refs: the id always travels with the history item index", () => 
         id: "t",
         toolName: "run_tool",
         phase: "end",
+        groupId: "m1",
         at: 2,
         result: ok({ outputs: [{ id: "d7", hid: 7, name: "out" }], jobs: [] }),
       },
@@ -1248,5 +1324,92 @@ describe("input refs: the id always travels with the history item index", () => 
       ["output", "dataset", "d7", 7],
     ]);
     expect(entry.detail).toBe("1 new dataset (#7)");
+  });
+});
+
+describe("step 12a: groups side by side", () => {
+  const call = (id: string, phase: "start" | "end", at: number, groupId: string): ToolEvent => ({
+    id,
+    toolName: "get_history_contents",
+    phase,
+    groupId,
+    at,
+  });
+
+  it("keeps named groups apart, each ending at its own time, in either order", () => {
+    const state = play([
+      { kind: "group-start", at: 0, groupId: "msg-1" },
+      { kind: "group-start", at: 1, groupId: "check-1" },
+      call("a", "start", 2, "msg-1"),
+      call("b", "start", 3, "check-1"),
+      call("a", "end", 4, "msg-1"),
+      { kind: "group-end", at: 5, groupId: "check-1" },
+      { kind: "model", at: 6, activity: "thinking", groupId: "msg-1" },
+    ]);
+    const [msg, check] = state.groups;
+    expect(msg).toMatchObject({ id: "msg-1", status: "active", now: { text: "Thinking…" } });
+    expect(msg.entries.map((e) => [e.id, e.status])).toEqual([["a", "done"]]);
+    expect(check).toMatchObject({ id: "check-1", status: "done", now: null });
+    expect(check.entries.map((e) => e.id)).toEqual(["b"]);
+
+    const both = advance(state, { kind: "group-end", at: 7, groupId: "msg-1" });
+    expect(both.groups.map((g) => g.status)).toEqual(["done", "done"]);
+  });
+
+  it("never ends a group because another one started", () => {
+    const state = play([
+      { kind: "group-start", at: 0, groupId: "msg-1" },
+      { kind: "group-start", at: 1, groupId: "msg-2" },
+    ]);
+    expect(state.groups.map((g) => [g.id, g.status])).toEqual([
+      ["msg-1", "active"],
+      ["msg-2", "active"],
+    ]);
+  });
+
+  it("finishes a call in its own group even after that group ended, without reopening it", () => {
+    const state = play([
+      { kind: "group-start", at: 0, groupId: "check-1" },
+      call("b", "start", 1, "check-1"),
+      { kind: "group-end", at: 2, groupId: "check-1" },
+      { kind: "group-start", at: 3, groupId: "msg-2" },
+      call("b", "end", 4, "check-1"),
+    ]);
+    expect(state.groups.map((g) => g.id)).toEqual(["check-1", "msg-2"]);
+    expect(state.groups[0]).toMatchObject({ status: "done", now: null });
+    expect(state.groups[0].entries[0]).toMatchObject({ status: "done", endedAt: 4 });
+    expect(state.groups[1].now?.text).toBe("Reading your request…");
+  });
+
+  it("opens no group for the end of a call it never saw start", () => {
+    expect(play([call("x", "end", 1, "msg-1")]).groups).toEqual([]);
+  });
+
+  it("ignores a repeated start for a group already running", () => {
+    const once = play([{ kind: "group-start", at: 0, groupId: "msg-1" }]);
+    expect(advance(once, { kind: "group-start", at: 1, groupId: "msg-1" })).toBe(once);
+  });
+
+  it("puts a wait on its own group, even while another runs", () => {
+    const state = play([
+      { kind: "group-start", at: 0, groupId: "msg-1" },
+      { kind: "group-start", at: 1, groupId: "msg-2" },
+      { kind: "awaiting-user", at: 2, text: "approve it", id: "p1", groupId: "msg-1" },
+      { kind: "group-end", at: 3, groupId: "msg-1" },
+    ]);
+    expect(state.groups[0]).toMatchObject({ status: "waiting", waitingFor: [{ id: "p1" }] });
+    expect(state.groups[1]).toMatchObject({ status: "active" });
+    expect(state.groups[1].waitingFor).toBeUndefined();
+  });
+
+  it("puts the newest group still at work in the status line, and the older one once it ends", () => {
+    const two = play([
+      { kind: "group-start", at: 0, groupId: "msg-1" },
+      { kind: "group-start", at: 1, groupId: "msg-2" },
+    ]);
+    expect(currentStatus(two)?.since).toBe(1);
+    const back = advance(two, { kind: "group-end", at: 2, groupId: "msg-2" });
+    expect(currentStatus(back)?.since).toBe(0);
+    expect(currentStatus(advance(back, { kind: "group-end", at: 3, groupId: "msg-1" }))).toBeNull();
   });
 });

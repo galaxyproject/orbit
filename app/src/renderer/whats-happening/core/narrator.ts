@@ -98,19 +98,20 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
   if ("phase" in event) return advanceTool(state, event);
   switch (event.kind) {
     case "group-start": {
-      const groups = state.groups.map((g) => (g.status === "active" ? close(g, event.at) : g));
+      // Groups run side by side; starting one never ends another.
+      if (activeGroup(state, event.groupId)) return state;
       const group: NarrationGroup = {
-        id: `g${state.groups.length + 1}`,
+        id: event.groupId,
         followUp: false,
         status: "active",
         now: { text: "Reading your request…", since: event.at },
         entries: [],
         startedAt: event.at,
       };
-      return { ...state, groups: [...groups, group] };
+      return { ...state, groups: [...state.groups, group] };
     }
     case "group-info":
-      return updateActive(state, (g) => ({
+      return updateActive(state, event.groupId, (g) => ({
         ...g,
         text: event.text,
         followUp: event.followUp,
@@ -120,9 +121,11 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
             : g.now,
       }));
     case "model":
-      return updateActive(state, (g) => withNow(g, MODEL_STATUS[event.activity], event.at));
+      return updateActive(state, event.groupId, (g) =>
+        withNow(g, MODEL_STATUS[event.activity], event.at),
+      );
     case "group-end":
-      return updateActive(state, (g) =>
+      return updateActive(state, event.groupId, (g) =>
         event.error
           ? { ...g, status: "stopped", now: null, endedAt: event.at, error: event.error }
           : close(g, event.at),
@@ -130,7 +133,8 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
     case "awaiting-user": {
       // Usually arrives mid-group (the call that asked ended, the model is still
       // replying); if the group has already ended, it still belongs to it.
-      const last = state.groups[state.groups.length - 1];
+      const index = lastIndex(state.groups, (g) => g.id === event.groupId);
+      const last = state.groups[index];
       if (!last) {
         return state;
       }
@@ -150,7 +154,7 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
         last.status === "done"
           ? { ...last, status: "waiting", waitingFor }
           : { ...last, waitingFor };
-      return { ...state, groups: [...state.groups.slice(0, -1), updated] };
+      return { ...state, groups: replaced(state.groups, index, updated) };
     }
     case "user-replied": {
       const answers = (r: WaitingRequest): boolean => !event.id || r.id === event.id;
@@ -192,9 +196,15 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
 }
 
 function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
-  // A tool call outside any group (shouldn't happen, but harnesses vary) opens one.
-  const base = activeGroup(state) ? state : advance(state, { kind: "group-start", at: event.at });
-  let next = updateActive(base, (g) => {
+  // A call's events go to its group, even once that group has ended (a late end).
+  let base = state;
+  let index = lastIndex(state.groups, (g) => g.id === event.groupId);
+  if (index === -1 && event.phase === "start") {
+    // A call outside any group (shouldn't happen, but harnesses vary) opens one.
+    base = advance(state, { kind: "group-start", at: event.at, groupId: event.groupId });
+    index = base.groups.length - 1;
+  }
+  let next = updateAt(base, index, (g) => {
     let entries = narrate(g.entries, event, state.names);
     if (entries === g.entries) return g;
     if (event.phase === "end") {
@@ -207,12 +217,14 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
         : event.phase === "end"
           ? "Deciding the next step…"
           : null;
-    return now ? withNow({ ...g, entries }, now, event.at) : { ...g, entries };
+    return now && g.status === "active"
+      ? withNow({ ...g, entries }, now, event.at)
+      : { ...g, entries };
   });
   // A call can return without an error yet carry a failed envelope: nothing was started then.
   const refused = event.phase === "end" && envelopeOf(event.result)?.success === false;
   if (event.phase === "end" && !event.isError && !refused && startsGalaxyWork(event.toolName)) {
-    const entry = activeGroup(next)?.entries.find((e) => e.id === event.id);
+    const entry = next.groups[index]?.entries.find((e) => e.id === event.id);
     if (entry && !next.galaxyRunning.some((w) => w.id === event.id)) {
       const runs = startedWork(event.toolName, event.result);
       if (runs.length === 0) {
@@ -225,7 +237,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
           ],
         };
       } else {
-        next = updateActive(next, (g) => ({
+        next = updateAt(next, index, (g) => ({
           ...g,
           entries: g.entries.map((e) =>
             e.id === event.id ? settle({ ...e, galaxy: runs }, event.at) : e,
@@ -375,7 +387,7 @@ function applyJobState(
  * ended, or nothing when idle.
  */
 export function currentStatus(state: NarrationState): NowLine | null {
-  const active = activeGroup(state);
+  const active = state.groups[lastIndex(state.groups, (g) => g.status === "active")];
   if (active?.now) {
     return active.now;
   }
@@ -404,20 +416,44 @@ export function currentStatus(state: NarrationState): NowLine | null {
   };
 }
 
-function activeGroup(state: NarrationState): NarrationGroup | undefined {
-  const last = state.groups[state.groups.length - 1];
-  return last?.status === "active" ? last : undefined;
+/** The group with this id, while it is still at work. */
+function activeGroup(state: NarrationState, id: string): NarrationGroup | undefined {
+  return state.groups[activeIndex(state, id)];
+}
+
+function activeIndex(state: NarrationState, id: string): number {
+  return lastIndex(state.groups, (g) => g.status === "active" && g.id === id);
+}
+
+function lastIndex<T>(items: readonly T[], match: (item: T) => boolean): number {
+  for (let i = items.length - 1; i >= 0; i--) if (match(items[i])) return i;
+  return -1;
+}
+
+function replaced<T>(items: readonly T[], index: number, item: T): T[] {
+  const copy = items.slice();
+  copy[index] = item;
+  return copy;
 }
 
 function updateActive(
   state: NarrationState,
+  id: string,
   change: (group: NarrationGroup) => NarrationGroup,
 ): NarrationState {
-  const active = activeGroup(state);
-  if (!active) return state;
-  const updated = change(active);
-  if (updated === active) return state;
-  return { ...state, groups: [...state.groups.slice(0, -1), updated] };
+  return updateAt(state, activeIndex(state, id), change);
+}
+
+function updateAt(
+  state: NarrationState,
+  index: number,
+  change: (group: NarrationGroup) => NarrationGroup,
+): NarrationState {
+  const group = state.groups[index];
+  if (!group) return state;
+  const updated = change(group);
+  if (updated === group) return state;
+  return { ...state, groups: replaced(state.groups, index, updated) };
 }
 
 /** Ends a group without an error: waiting if it left the user something to do, else done. */

@@ -23,6 +23,8 @@ export interface ToolEvent {
   result?: unknown;
   /** Whether the call failed. Only meaningful on `end`. */
   isError?: boolean;
+  /** The group this call belongs to (see `group-start`). */
+  groupId: string;
 }
 
 /** The kinds of Galaxy object a narration step can point at. */
@@ -97,17 +99,22 @@ export interface NarrationEntry {
  * `group-end`.
  */
 export type LifecycleEvent =
-  | { kind: "group-start"; at: number }
+  | {
+      kind: "group-start";
+      at: number;
+      groupId: string;
+    }
   | {
       kind: "group-info";
       at: number;
+      groupId: string;
       /** The message that started the group, as the user typed it. */
       text: string;
       /** True when the harness started the group itself (e.g. to follow up on a Galaxy job). */
       followUp: boolean;
     }
-  | { kind: "model"; at: number; activity: "thinking" | "writing" | "tool-call" }
-  | { kind: "group-end"; at: number; error?: string }
+  | { kind: "model"; at: number; activity: "thinking" | "writing" | "tool-call"; groupId: string }
+  | { kind: "group-end"; at: number; error?: string; groupId: string }
   | {
       kind: "galaxy-finished";
       at: number;
@@ -134,6 +141,7 @@ export type LifecycleEvent =
        */
       kind: "awaiting-user";
       at: number;
+      groupId: string;
       /** What the user needs to do, in plain words, e.g. `approve "Select random lines" (/approve prop-4esjcv)`. */
       text: string;
       /**

@@ -26,7 +26,9 @@ whats-happening/
 1. Turn the harness's events into `NarrationEvent`s: tool calls as
    `ToolEvent` (`start` / `end`, with the call's arguments and its galaxy-ops
    envelope as the result), and lifecycle events (`group-start`,
-   `group-end`, `model`, `awaiting-user`, `job-state`, …).
+   `group-end`, `model`, `awaiting-user`, `job-state`, …). Each group's
+   events carry its `groupId` (one per message, background check, subagent,
+   …), so groups can run side by side; each ends on its own `group-end`.
 2. Fold them in with `advance(state, event)`, starting from `EMPTY_STATE`.
    It is pure and returns the same state when nothing changed.
 3. Draw `currentStatus(state)` and `state.groups`.
