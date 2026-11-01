@@ -229,7 +229,9 @@ describe("registerToolRetryBreaker", () => {
     stopped.abort();
     b.attempt("t", { a: 1 });
     b.attempt("t", { a: 1 });
-    expect(b.attempt("t", { a: 1 }, { signal: stopped.signal, text: "aborted" })).toBeUndefined();
+    // Same error text as the real failures, so only the abort skip keeps it
+    // from being the third strike.
+    expect(b.attempt("t", { a: 1 }, { signal: stopped.signal })).toBeUndefined();
   });
 
   it("ignores calls another tool made", () => {
