@@ -35,6 +35,7 @@ whats-happening/
 3. Draw `state.groups`, plus what is happening now:
    - `currentActivity(state)`: everything going on at once.
    - `currentStatus(state)`: one line, when there is room for only one.
+   - `isStalled(line, now)` / `stallText(line)`: when a line has gone quiet, who is slow.
 4. To show the work done for a user's message, put the message's id on its
    `group-message` event. For the harness's own follow-ups, also say which
    Galaxy jobs they are about. Everything done for a message, follow-ups
