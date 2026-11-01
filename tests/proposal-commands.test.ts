@@ -404,7 +404,8 @@ describe("edit after approve revokes, on the next read", () => {
     } as never;
     registerProposalCommands(pi, deps());
     const id = await proposed();
-    const ctx = { hasUI: false, ui: { notify: () => {} } };
+    // An rpc shell without dialogs (the browser's) still gets the follow-up.
+    const ctx = { mode: "rpc", hasUI: false, ui: { notify: () => {} } };
     await handler!(`${id} --yes`, ctx);
     expect(sent).toEqual([approvedRunPrompt(id)]);
     expect(sent[0]).toContain(`proposalId: "${id}"`);
@@ -412,6 +413,27 @@ describe("edit after approve revokes, on the next read", () => {
     await handler!("prop-nope --yes", ctx);
     expect(sent).toHaveLength(1);
   });
+
+  it.each(["print", "json"])(
+    "starts no turn in %s mode, where it would collide with the next message",
+    async (mode) => {
+      const sent: string[] = [];
+      let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
+      const pi = {
+        registerTool: () => {},
+        registerCommand: (name: string, c: { handler: typeof handler }) => {
+          if (name === "approve") handler = c.handler;
+        },
+        on: () => {},
+        sendUserMessage: (text: string) => sent.push(text),
+      } as never;
+      registerProposalCommands(pi, deps());
+      const id = await proposed();
+      await handler!(`${id} --yes`, { mode, hasUI: false, ui: { notify: () => {} } });
+      expect(liveApproval(session!.store.snapshot(), id)).toBeDefined();
+      expect(sent).toEqual([]);
+    },
+  );
 
   it("an edit to the label alone leaves the approval live", async () => {
     const id = await proposed();
