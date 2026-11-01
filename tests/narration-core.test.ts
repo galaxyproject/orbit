@@ -1,6 +1,7 @@
 import { allOperations } from "@galaxyproject/galaxy-ops/browser";
 import { describe, expect, it } from "vitest";
 import {
+  argRefs,
   classifyTool,
   describeDoneCall,
   describeFailedCall,
@@ -9,6 +10,7 @@ import {
   normalizeToolName,
 } from "../app/src/renderer/whats-happening/core/catalog.js";
 import { EMPTY_NAMES, learnNames } from "../app/src/renderer/whats-happening/core/names.js";
+import { rowsOf } from "../app/src/renderer/whats-happening/core/rows.js";
 import {
   failureReason,
   producedRefs,
@@ -65,7 +67,7 @@ describe("narrate", () => {
         title: "Running __BUILD_LIST__",
         doneTitle: "Ran __BUILD_LIST__",
         failedTitle: "__BUILD_LIST__ failed",
-        links: [],
+        links: [{ kind: "tool", id: "__BUILD_LIST__", label: "__BUILD_LIST__", role: "input" }],
         startedAt: 1000,
       },
     ]);
@@ -1077,7 +1079,10 @@ describe("step 7: finished entries carry what happened", () => {
     expect(entries[0]).toMatchObject({
       status: "done",
       detail: "1 new dataset (#7)",
-      links: [{ kind: "dataset", id: "d1", label: "#7 out" }],
+      links: [
+        { kind: "tool", id: "cat1", role: "input" },
+        { kind: "dataset", id: "d1", label: "#7 out" },
+      ],
     });
   });
 
@@ -1333,6 +1338,7 @@ describe("input refs: the id always travels with the history item index", () => 
     const entry = state.groups[0].entries[0];
     expect(entry.links.map((l) => [l.role, l.kind, l.id, l.hid])).toEqual([
       ["input", "dataset", "d4", undefined],
+      ["input", "tool", "cat1", undefined],
       ["output", "dataset", "d7", 7],
     ]);
     expect(entry.detail).toBe("1 new dataset (#7)");
@@ -1644,5 +1650,118 @@ describe("the message a group serves", () => {
     const followUp = state.groups[1];
     expect(followUp.followUpOf).toBeUndefined();
     expect(anchorUserMessage(state, followUp)).toBeUndefined();
+  });
+});
+
+describe("rows: changes with their children", () => {
+  const call = (id: string, toolName: string, at: number): ToolEvent[] => [
+    { id, toolName, phase: "start", groupId: "m1", at },
+    { id, toolName, phase: "end", groupId: "m1", at: at + 1 },
+  ];
+  const rowsFor = (events: NarrationEvent[]) =>
+    rowsOf(play([{ kind: "group-start", groupId: "m1", at: 0 }, ...events]).groups[0]);
+  const ids = (entries: readonly NarrationEntry[]) => entries.map((e) => e.id);
+
+  it("puts each read under the change before it, and earlier reads under the first change", () => {
+    const { rows, checks, internal } = rowsFor([
+      ...call("look1", "get_history_contents", 1),
+      ...call("look2", "search_tools_by_name", 3),
+      ...call("run1", "run_tool", 5),
+      ...call("wait1", "get_job_details", 7),
+      ...call("note", "edit", 9),
+      ...call("up1", "upload_file_from_url", 11),
+      ...call("look3", "get_dataset_details", 13),
+    ]);
+    expect(rows.map((r) => [r.change.id, ids(r.children)])).toEqual([
+      ["run1", ["look1", "look2", "wait1"]],
+      ["up1", ["look3"]],
+    ]);
+    expect(checks).toEqual([]);
+    expect(ids(internal)).toEqual(["note"]);
+  });
+
+  it("keeps the reads and checks of a group that changed nothing on their own", () => {
+    const { rows, checks, internal } = rowsFor([
+      ...call("look1", "get_histories", 1),
+      ...call("note", "read", 3),
+      ...call("look2", "get_history_contents", 5),
+    ]);
+    expect(rows).toEqual([]);
+    expect(ids(checks)).toEqual(["look1", "look2"]);
+    expect(ids(internal)).toEqual(["note"]);
+  });
+
+  const read = (id: string, toolName: string, args: object, at: number): ToolEvent[] => [
+    { id, toolName, phase: "start", groupId: "m1", at, args },
+    { id, toolName, phase: "end", groupId: "m1", at: at + 1 },
+  ];
+  const runOn = (
+    id: string,
+    dataset: string,
+    at: number,
+    out: string,
+    job: string,
+  ): ToolEvent[] => [
+    {
+      id,
+      toolName: "run_tool",
+      phase: "start",
+      groupId: "m1",
+      at,
+      args: {
+        tool_id: "Show beginning1",
+        history_id: "h1",
+        inputs: { input: { src: "hda", id: dataset } },
+      },
+    },
+    {
+      id,
+      toolName: "run_tool",
+      phase: "end",
+      groupId: "m1",
+      at: at + 1,
+      result: { data: { outputs: [{ id: out }], jobs: [{ id: job, state: "ok" }] }, success: true },
+    },
+  ];
+
+  it("puts each check under the run that works on what it checked, whatever the order", () => {
+    // The order Orbit used live: both inputs checked, then both runs.
+    const { rows } = rowsFor([
+      ...read("c3", "get_dataset_details", { dataset_id: "d3" }, 1),
+      ...read("c4", "get_dataset_details", { datasetId: "d4" }, 3),
+      ...runOn("r3", "d3", 5, "d6", "j3"),
+      ...runOn("r4", "d4", 7, "d7", "j4"),
+      ...read("v6", "get_dataset_details", { dataset_id: "d6" }, 9),
+      ...read("j", "get_job_details", { job_id: "j4" }, 11),
+    ]);
+    expect(rows.map((r) => [r.change.id, ids(r.children)])).toEqual([
+      ["r3", ["c3", "v6"]],
+      ["r4", ["c4", "j"]],
+    ]);
+  });
+
+  it("names what a call targets from any id argument of a known kind, in either spelling", () => {
+    expect(
+      argRefs({
+        dataset_id: "d1",
+        historyId: "h1",
+        job_id: "j1",
+        page_id: "p1",
+        constructor_id: "x",
+        n: 3,
+      }).map((r) => [r.kind, r.id]),
+    ).toEqual([
+      ["dataset", "d1"],
+      ["history", "h1"],
+      ["job", "j1"],
+    ]);
+  });
+
+  it("arranges a group still at work the same way", () => {
+    const { rows } = rowsFor([
+      ...call("run1", "run_tool", 1),
+      { id: "look1", toolName: "get_dataset_details", phase: "start", groupId: "m1", at: 3 },
+    ]);
+    expect(rows.map((r) => [r.change.id, ids(r.children)])).toEqual([["run1", ["look1"]]]);
   });
 });

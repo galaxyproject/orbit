@@ -18,7 +18,7 @@ import {
 } from "@galaxyproject/galaxy-ops/browser";
 
 import { galaxyRef } from "./refs.js";
-import type { GalaxyRef, NameMemory, ToolKind } from "./types.js";
+import type { GalaxyRef, GalaxyRefKind, NameMemory, ToolKind } from "./types.js";
 
 const GALAXY_PREFIXES = ["mcp__galaxy__", "galaxy_"];
 
@@ -331,6 +331,48 @@ export function inputRefs(inputs: unknown, names?: NameMemory): GalaxyRef[] {
   };
   walk(inputs, 0);
   return [...found.values()];
+}
+
+/** Every kind of Galaxy object a call's argument can name; a new `GalaxyRefKind` must be added here. */
+const ARG_KINDS: Record<GalaxyRefKind, true> = {
+  history: true,
+  dataset: true,
+  collection: true,
+  job: true,
+  invocation: true,
+  workflow: true,
+  tool: true,
+};
+
+/**
+ * The Galaxy objects a call's arguments name directly, as input refs: any
+ * `<kind>_id` or `<kind>Id` argument (`dataset_id`, `historyId`, `job_id`, …)
+ * whose kind is a `GalaxyRefKind`, with the name and history item index when
+ * they've been seen.
+ */
+export function argRefs(args: Record<string, unknown>, names?: NameMemory): GalaxyRef[] {
+  const refs: GalaxyRef[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    if (typeof value !== "string" || !value) continue;
+    const word = /^(\w+?)_id$/.exec(key.replace(/([a-z])([A-Z])/g, "$1_$2").toLowerCase())?.[1];
+    if (!word || !Object.hasOwn(ARG_KINDS, word)) continue;
+    const kind = word as GalaxyRefKind;
+    const item =
+      kind === "dataset"
+        ? names?.datasets[value]
+        : kind === "collection"
+          ? names?.collections[value]
+          : undefined;
+    const name =
+      item?.name ??
+      (kind === "history"
+        ? names?.histories[value]
+        : kind === "tool"
+          ? names?.tools[value]
+          : undefined);
+    refs.push(galaxyRef(kind, value, { hid: item?.hid, name, role: "input" }));
+  }
+  return refs;
 }
 
 /**

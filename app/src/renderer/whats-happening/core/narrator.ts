@@ -10,6 +10,7 @@
 import { isJobSuccess, isJobTerminal, isPlainObject } from "@galaxyproject/galaxy-ops/browser";
 
 import {
+  argRefs,
   classifyTool,
   describeDoneCall,
   describeFailedCall,
@@ -29,6 +30,7 @@ import {
 } from "./results.js";
 import type {
   ActivityLine,
+  GalaxyRef,
   GalaxyRun,
   GalaxyRunRef,
   GroupMessage,
@@ -61,7 +63,7 @@ export function narrate(
           status: "running",
           title: describeToolCall(event.toolName, event.args, names),
           ...outcomeTitlesFor(event.toolName, event.args, names),
-          links: isPlainObject(event.args) ? inputRefs(event.args.inputs, names) : [],
+          links: isPlainObject(event.args) ? targetRefs(event.args, names) : [],
           startedAt: event.at,
         },
       ];
@@ -579,6 +581,17 @@ function galaxyFacts(toolName: string): Pick<NarrationEntry, "domain" | "destruc
   const op = operationFor(toolName);
   if (!op) return {};
   return { domain: op.domain, ...(op.destructive ? { destructive: true } : {}) };
+}
+
+/**
+ * What a call works on, from its arguments: the datasets and collections in
+ * its tool inputs, and any Galaxy object an argument names by id, each once.
+ */
+function targetRefs(args: Record<string, unknown>, names: NameMemory): GalaxyRef[] {
+  const refs = [...inputRefs(args.inputs, names), ...argRefs(args, names)];
+  return refs.filter(
+    (ref, i) => refs.findIndex((r) => r.kind === ref.kind && r.id === ref.id) === i,
+  );
 }
 
 function outcomeTitlesFor(

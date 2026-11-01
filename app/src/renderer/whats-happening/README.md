@@ -18,7 +18,8 @@ whats-happening/
     ├── catalog.ts   what each tool call means (change / look / wait / internal) and its title
     ├── results.ts   reads a call's galaxy-ops envelope: jobs started, items produced, failure reason
     ├── names.ts     names of tools, datasets and histories learned from results
-    └── refs.ts      builds the links (GalaxyRef) to Galaxy objects
+    ├── refs.ts      builds the links (GalaxyRef) to Galaxy objects
+    └── rows.ts      arranges a group as changes, each with the reads and checks done for it
 ```
 
 ## Using the core

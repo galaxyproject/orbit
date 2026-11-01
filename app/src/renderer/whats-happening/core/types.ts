@@ -267,3 +267,23 @@ export interface NarrationState {
   galaxyRunning: readonly GalaxyWork[];
   names: NameMemory;
 }
+
+/** One change to the user's Galaxy, with the reads and checks that belong to it. */
+export interface NarrationRow {
+  change: NarrationEntry;
+  /** Reads and checks done for this change, in order. */
+  children: readonly NarrationEntry[];
+}
+
+/** A group's entries arranged for display, from `rowsOf()`. */
+export interface GroupRows {
+  /** The group's changes, in order, each with its children. */
+  rows: readonly NarrationRow[];
+  /**
+   * Reads and checks of a group that changed nothing, so there is no change to
+   * put them under. Empty whenever `rows` has a change.
+   */
+  checks: readonly NarrationEntry[];
+  /** The harness's own bookkeeping (notes, files). */
+  internal: readonly NarrationEntry[];
+}
