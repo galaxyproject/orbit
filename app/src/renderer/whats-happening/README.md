@@ -12,6 +12,8 @@ talks to Galaxy through the Galaxy MCP can use it.
 
 ```
 whats-happening/
+├── adapters/
+│   └── pi.ts     pi's events into narration events, for harnesses built on pi
 └── core/
     ├── types.ts     events in (tool calls, lifecycle), the state out
     ├── narrator.ts  advance(): folds events into the state; currentStatus()
@@ -30,6 +32,8 @@ whats-happening/
    `group-end`, `model`, `awaiting-user`, `job-state`, …). Each group's
    events carry its `groupId` (one per message, background check, subagent,
    …), so groups can run side by side; each ends on its own `group-end`.
+   A harness built on pi (like Orbit) gets this from `adapters/pi.ts`:
+   `fromPiEvent()` turns each pi event into narration events.
 2. Fold them in with `advance(state, event)`, starting from `EMPTY_STATE`.
    It is pure and returns the same state when nothing changed.
 3. Draw `state.groups`, plus what is happening now:
@@ -44,4 +48,4 @@ whats-happening/
    from the harness's own poller, so rows stay "running" until Galaxy says
    they are done.
 
-Tests: `tests/narration-core.test.ts`.
+Tests: `tests/narration-core.test.ts`, `tests/narration-pi-adapter.test.ts`.
