@@ -456,6 +456,32 @@ describe("TurnWatchdog", () => {
       expect(onTimeout).not.toHaveBeenCalled();
     });
 
+    it("times the compaction again once its dialog is answered", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("compaction_start");
+      watchdog.observe("extension_ui_request", "confirm");
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT * 3);
+      // The brain says nothing until compaction_end, so only the answer can lift the pause.
+      watchdog.dialogAnswered();
+
+      vi.advanceTimersByTime(COMPACTION_TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it("stays paused when a dialog is answered mid-tool", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("tool_execution_start");
+      watchdog.observe("extension_ui_request", "confirm");
+      watchdog.dialogAnswered();
+
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
     it("keeps watching a turn on the normal window after a crashed brain's compaction is forgotten", () => {
       const { watchdog, onTimeout } = make();
       watchdog.promptSent();
