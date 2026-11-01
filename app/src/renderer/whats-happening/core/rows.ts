@@ -50,5 +50,7 @@ export function rowsOf(group: NarrationGroup): GroupRows {
 
 /** Whether a read or check and a change name the same Galaxy object. */
 function sharesTarget(read: NarrationEntry, change: NarrationEntry): boolean {
-  return read.links.some((r) => change.links.some((c) => c.kind === r.kind && c.id === r.id));
+  return read.galaxyRefs.some((r) =>
+    change.galaxyRefs.some((c) => c.kind === r.kind && c.id === r.id),
+  );
 }

@@ -68,7 +68,7 @@ function workOf(kind: StartedWork["kind"], value: unknown): StartedWork[] {
 }
 
 /**
- * What a successful call produced or touched, as links to Galaxy: the
+ * What a successful call produced or touched, as refs to Galaxy objects: the
  * datasets and collections a tool run or upload made (with their history
  * item indexes and names), its jobs, the history a call created, the workflow
  * runs it started. Nothing for a failed call or a read.

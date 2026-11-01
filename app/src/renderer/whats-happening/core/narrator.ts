@@ -63,7 +63,7 @@ export function narrate(
           status: "running",
           title: describeToolCall(event.toolName, event.args, names),
           ...outcomeTitlesFor(event.toolName, event.args, names),
-          links: isPlainObject(event.args) ? targetRefs(event.args, names) : [],
+          galaxyRefs: isPlainObject(event.args) ? targetRefs(event.args, names) : [],
           startedAt: event.at,
         },
       ];
@@ -607,7 +607,7 @@ function outcomeTitlesFor(
 /**
  * What a call's result says, put on its entry: a failure the harness didn't
  * flag (a failed envelope) marks it failed; a failed entry gets the reason, a
- * successful one the links to what it produced and a short line about them.
+ * successful one the refs to what it produced and a short line about them.
  */
 function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
   const refused = envelopeOf(event.result)?.success === false;
@@ -625,5 +625,9 @@ function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
   const produced = producedRefs(event.toolName, event.result);
   if (produced.length === 0) return entry;
   const detail = producedSummary(produced);
-  return { ...entry, links: [...entry.links, ...produced], ...(detail ? { detail } : {}) };
+  return {
+    ...entry,
+    galaxyRefs: [...entry.galaxyRefs, ...produced],
+    ...(detail ? { detail } : {}),
+  };
 }

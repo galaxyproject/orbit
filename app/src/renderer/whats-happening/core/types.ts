@@ -88,7 +88,21 @@ export interface NarrationEntry {
   detail?: string;
   /** A failed call's whole message, exactly as Galaxy or the harness gave it, e.g. for a "show the full error" view. */
   failureMessage?: string;
-  links: GalaxyRef[];
+  /**
+   * The Galaxy objects the call was about: what it used (`role: "input"`, from
+   * its arguments) and what it made (`role: "output"`, from its result). A view
+   * can link to them in Galaxy, and `rowsOf()` matches reads to changes by them.
+   *
+   * @example
+   * // "Ran Select first on "1.bed" (#1) — 1 new dataset (#5)"
+   * [
+   *   { kind: "dataset", id: "f9cad7b0…a4ef", label: "#1 1.bed", hid: 1, name: "1.bed", role: "input" },
+   *   { kind: "tool", id: "Show beginning1", label: "Show beginning1", role: "input" },
+   *   { kind: "dataset", id: "f9cad7b0…724f", label: "#5 Select first on data 1", hid: 5, name: "Select first on data 1", role: "output" },
+   *   { kind: "job", id: "bbd44e69…3e76b", label: "bbd44e69…3e76b", role: "output" },
+   * ]
+   */
+  galaxyRefs: GalaxyRef[];
   startedAt: number;
   endedAt?: number;
 }

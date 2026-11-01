@@ -67,7 +67,9 @@ describe("narrate", () => {
         title: "Running __BUILD_LIST__",
         doneTitle: "Ran __BUILD_LIST__",
         failedTitle: "__BUILD_LIST__ failed",
-        links: [{ kind: "tool", id: "__BUILD_LIST__", label: "__BUILD_LIST__", role: "input" }],
+        galaxyRefs: [
+          { kind: "tool", id: "__BUILD_LIST__", label: "__BUILD_LIST__", role: "input" },
+        ],
         startedAt: 1000,
       },
     ]);
@@ -1056,7 +1058,7 @@ describe("step 7: why a call failed", () => {
 });
 
 describe("step 7: finished entries carry what happened", () => {
-  it("puts links and a produced line on a successful tool run", () => {
+  it("puts refs and a produced line on a successful tool run", () => {
     const entries = play([
       { kind: "group-start", groupId: "m1", at: 0 },
       {
@@ -1079,7 +1081,7 @@ describe("step 7: finished entries carry what happened", () => {
     expect(entries[0]).toMatchObject({
       status: "done",
       detail: "1 new dataset (#7)",
-      links: [
+      galaxyRefs: [
         { kind: "tool", id: "cat1", role: "input" },
         { kind: "dataset", id: "d1", label: "#7 out" },
       ],
@@ -1336,7 +1338,7 @@ describe("input refs: the id always travels with the history item index", () => 
       },
     ]);
     const entry = state.groups[0].entries[0];
-    expect(entry.links.map((l) => [l.role, l.kind, l.id, l.hid])).toEqual([
+    expect(entry.galaxyRefs.map((r) => [r.role, r.kind, r.id, r.hid])).toEqual([
       ["input", "dataset", "d4", undefined],
       ["input", "tool", "cat1", undefined],
       ["output", "dataset", "d7", 7],
