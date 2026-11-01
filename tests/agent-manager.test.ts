@@ -403,6 +403,36 @@ describe("AgentManager", () => {
       }
     });
 
+    it("drops the compaction when the brain is stopped and started again (#616)", async () => {
+      vi.useFakeTimers();
+      try {
+        const first = makeProcess(101);
+        const second = makeProcess(202);
+        spawnMock.mockReturnValueOnce(first).mockReturnValueOnce(second);
+        const { AgentManager, COMPACTION_TIMEOUT_MS } = await import("../app/src/main/agent.js");
+        const window = {
+          isDestroyed: () => false,
+          setTitle: vi.fn(),
+          webContents: { send: vi.fn() },
+        };
+        const manager = new AgentManager(window as any, "/analysis");
+        manager.start();
+
+        manager.send({ type: "prompt", message: "Keep going" });
+        lineHandler?.(JSON.stringify({ type: "compaction_start", reason: "threshold" }));
+        // stop() strips the old brain's listeners, so its exit handler never runs.
+        manager.stop();
+        manager.start();
+        vi.advanceTimersByTime(COMPACTION_TIMEOUT_MS * 2);
+        expect(second.stdin.write).not.toHaveBeenCalledWith(
+          expect.stringMatching(/"type":"abort"/),
+        );
+        expect(errorEvents(window)).toHaveLength(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it("drops a crashed brain's compaction when it restarts the brain (#616)", async () => {
       vi.useFakeTimers();
       try {
