@@ -17,7 +17,8 @@ whats-happening/
 ├── adapters/
 │   └── pi.ts               pi's events into narration events, for harnesses built on pi
 ├── views/
-│   ├── parts.ts            shared by the views: status lines, the message card, styles
+│   ├── card.ts             shared by the views: the message card, its rows, steps and follow-ups
+│   ├── parts.ts            shared by the views: the base element, status lines, styles
 │   └── whats-happening.ts  <whats-happening>: the live status and every message's card
 └── core/
     ├── types.ts     events in (tool calls, lifecycle), the state out

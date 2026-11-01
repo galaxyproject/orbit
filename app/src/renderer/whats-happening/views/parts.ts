@@ -24,13 +24,19 @@ import type {
 /** A Galaxy page for a ref, or undefined when the host can't link to it. */
 export type GalaxyLinkBuilder = (ref: GalaxyRef) => string | undefined;
 
-/** What every part needs to draw: the state, the time, and how to name the assistant. */
+/** What every part needs to draw. */
 export interface DrawContext {
   state: NarrationState;
   /** The current time, in epoch milliseconds. */
   now: number;
   /** The assistant's name, e.g. "Orbit"; without it the wording stays neutral. */
   assistantName?: string;
+  /** Builds a link into Galaxy for a ref; without it, nothing is a link. */
+  buildUrl?: GalaxyLinkBuilder;
+  /** Whether a fold (by its key) is open: what the user last chose, else `byDefault`. */
+  isOpen: (key: string, byDefault: boolean) => boolean;
+  /** Remembers the user opening or closing a fold, so a redraw keeps it that way. */
+  setOpen: (key: string, open: boolean) => void;
 }
 
 /**
@@ -57,6 +63,8 @@ export class NarrationView extends LitElement {
 
   #clock = Date.now();
   #ticker?: ReturnType<typeof setInterval>;
+  /** Folds the user opened or closed, by key. */
+  #folds = new Map<string, boolean>();
 
   constructor() {
     super();
@@ -69,6 +77,9 @@ export class NarrationView extends LitElement {
       state: this.state,
       now: this.now ?? Math.max(this.#clock, Date.now()),
       assistantName: this.assistantName,
+      buildUrl: this.buildUrl,
+      isOpen: (key, byDefault) => this.#folds.get(key) ?? byDefault,
+      setOpen: (key, open) => this.#folds.set(key, open),
     };
   }
 
@@ -140,16 +151,6 @@ export function nowText(line: NowLine, ctx: DrawContext): string {
     : line.text;
 }
 
-/** One message's card. */
-export function card(group: NarrationGroup, ctx: DrawContext) {
-  return html`<section class="card">
-    <header>
-      <span>${cardTitle(group, ctx)}</span>
-      <span class="state">${cardState(group, ctx)}</span>
-    </header>
-  </section>`;
-}
-
 /** "You asked: …", or for the harness's own follow-up, who followed up on what. */
 export function cardTitle(group: NarrationGroup, ctx: DrawContext): string {
   const message = anchorUserMessage(ctx.state, group);
@@ -202,15 +203,5 @@ export const partStyles = css`
     border: 1px solid var(--wh-border, rgba(127, 127, 127, 0.4));
     border-radius: var(--wh-radius, 6px);
     background: var(--wh-card, transparent);
-  }
-  .card header {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    font-weight: 600;
-  }
-  .card .state {
-    flex: none;
-    white-space: nowrap;
   }
 `;

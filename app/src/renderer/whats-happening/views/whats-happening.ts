@@ -12,7 +12,8 @@
 import { css, html, nothing } from "lit";
 
 import { groupsForUserMessage } from "../core/narrator.js";
-import { card, NarrationView, partStyles, statusLines } from "./parts.js";
+import { cardStyles, cards } from "./card.js";
+import { NarrationView, partStyles, statusLines } from "./parts.js";
 
 export type { GalaxyLinkBuilder } from "./parts.js";
 
@@ -27,6 +28,7 @@ export class WhatsHappeningElement extends NarrationView {
 
   static override styles = [
     partStyles,
+    cardStyles,
     css`
       .empty {
         padding: 24px 0;
@@ -41,11 +43,11 @@ export class WhatsHappeningElement extends NarrationView {
     const groups = this.userMessageId
       ? groupsForUserMessage(ctx.state, this.userMessageId)
       : ctx.state.groups;
-    // Newest first.
-    const cards = [...groups].reverse().map((group) => card(group, ctx));
+    // Newest first; follow-ups inside the card they belong to.
+    const drawn = cards(groups, ctx);
     if (this.userMessageId) {
       // Just that message's work, and nothing when there is none.
-      return groups.length === 0 ? nothing : cards;
+      return groups.length === 0 ? nothing : drawn;
     }
     if (groups.length === 0) {
       const who = this.assistantName ?? "your assistant";
@@ -53,7 +55,7 @@ export class WhatsHappeningElement extends NarrationView {
         When ${who} starts working, each step will show up here.
       </div>`;
     }
-    return html`${statusLines(ctx)}${cards}`;
+    return html`${statusLines(ctx)}${drawn}`;
   }
 }
 
