@@ -8,12 +8,17 @@ waiting on them. In Orbit it is the "What's Happening" tab of the right pane.
 
 `core/` is harness-agnostic: it imports nothing from Orbit, pi or the DOM,
 only `@galaxyproject/galaxy-ops` (its browser entry), so any harness that
-talks to Galaxy through the Galaxy MCP can use it.
+talks to Galaxy through the Galaxy MCP can use it. `views/` draws it as
+elements (Lit, their one dependency) for any page or webview, whatever
+framework the page uses.
 
 ```
 whats-happening/
 ├── adapters/
-│   └── pi.ts     pi's events into narration events, for harnesses built on pi
+│   └── pi.ts               pi's events into narration events, for harnesses built on pi
+├── views/
+│   ├── parts.ts            shared by the views: status lines, the message card, styles
+│   └── whats-happening.ts  <whats-happening>: the live status and every message's card
 └── core/
     ├── types.ts     events in (tool calls, lifecycle), the state out
     ├── narrator.ts  advance(): folds events into the state; currentStatus()
@@ -48,4 +53,11 @@ whats-happening/
    from the harness's own poller, so rows stay "running" until Galaxy says
    they are done.
 
-Tests: `tests/narration-core.test.ts`, `tests/narration-pi-adapter.test.ts`.
+To draw it, register the element with `defineWhatsHappening()` and set its
+`state` after each change. Optionally give it `buildUrl` (links into Galaxy),
+`assistant-name` (e.g. "Orbit"), and `user-message-id` to draw only one
+message's work, e.g. under its chat bubble. Restyle it with `--wh-*` CSS
+custom properties.
+
+Tests: `tests/narration-core.test.ts`, `tests/narration-pi-adapter.test.ts`,
+`tests/narration-view.test.ts`.
