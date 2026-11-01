@@ -12,7 +12,7 @@ import { isPlainObject, type GalaxyResult } from "@galaxyproject/galaxy-ops/brow
 
 import { normalizeToolName } from "./catalog.js";
 import { galaxyRef } from "./refs.js";
-import type { GalaxyRef, GalaxyRefKind } from "./types.js";
+import type { GalaxyRef, GalaxyRefKind, GalaxyRun, InvocationStep } from "./types.js";
 
 /** A Galaxy job or workflow invocation a call started, as the result reported it. */
 export interface StartedWork {
@@ -65,6 +65,49 @@ export function startedWork(toolName: string, result: unknown): StartedWork[] {
     default:
       return [];
   }
+}
+
+/**
+ * Each workflow invocation a successful result describes in detail (Galaxy's
+ * invocation view with `steps`, e.g. `get_invocations` with step details), with
+ * its state and steps. Nothing for anything else.
+ */
+export function invocationsSeen(result: unknown): GalaxyRun[] {
+  const envelope = envelopeOf(result);
+  if (!envelope?.success) return [];
+  const data: unknown = envelope.data;
+  return (Array.isArray(data) ? data : [data]).flatMap((inv) => {
+    if (!isPlainObject(inv) || typeof inv.id !== "string" || !Array.isArray(inv.steps)) return [];
+    const state = typeof inv.state === "string" ? inv.state : "new";
+    return [{ kind: "invocation" as const, id: inv.id, state, steps: stepsOf(inv.steps) }];
+  });
+}
+
+/** Galaxy's invocation steps, as `InvocationStep`s; anything that isn't a step is skipped. */
+export function stepsOf(steps: readonly unknown[]): InvocationStep[] {
+  return steps.flatMap((step) => {
+    if (!isPlainObject(step) || typeof step.order_index !== "number") return [];
+    const label =
+      typeof step.workflow_step_label === "string" && step.workflow_step_label
+        ? step.workflow_step_label
+        : undefined;
+    const jobs = Array.isArray(step.jobs)
+      ? step.jobs.flatMap((job) =>
+          isPlainObject(job) && typeof job.id === "string"
+            ? [{ id: job.id, state: typeof job.state === "string" ? job.state : "new" }]
+            : [],
+        )
+      : [];
+    return [
+      {
+        index: step.order_index,
+        ...(label ? { label } : {}),
+        state: typeof step.state === "string" ? step.state : "new",
+        // An empty list may just mean Galaxy left the jobs out (no step details).
+        ...(jobs.length > 0 ? { jobs } : {}),
+      },
+    ];
+  });
 }
 
 function workOf(kind: StartedWork["kind"], value: unknown): StartedWork[] {

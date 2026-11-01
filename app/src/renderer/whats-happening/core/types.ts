@@ -72,7 +72,13 @@ export interface NarrationEntry {
    * them. While any is unfinished the entry stays `running`, even after the
    * call itself returned.
    */
-  galaxy?: readonly GalaxyRun[];
+  startedRuns?: readonly GalaxyRun[];
+  /**
+   * Galaxy runs this call reported on without starting them, e.g. a read of a
+   * workflow run's details: their state and steps as the call saw them. Kept
+   * even for a run started before the harness was watching.
+   */
+  seenRuns?: readonly GalaxyRun[];
   /**
    * `untracked`: the call's Galaxy work reached no known end; the harness
    * stopped following a job that was still going, so we can't say how it ended.
@@ -155,6 +161,10 @@ export type LifecycleEvent =
       at: number;
       id: string;
       state: string;
+      /** For a workflow invocation, when the harness knows them: its steps. */
+      steps?: readonly InvocationStep[];
+      /** For a workflow invocation, when the harness counts it: how far it has got. */
+      progress?: RunProgress;
     }
   | {
       /**
@@ -246,10 +256,41 @@ export interface GalaxyRun {
   state: string;
   /** Set when the harness stopped following this run before it reached an end. */
   untracked?: boolean;
+  /** For a workflow invocation: its steps, as Galaxy last reported them. */
+  steps?: readonly InvocationStep[];
+  /** For a workflow invocation: how far it has got, when the harness counts that instead of listing steps. */
+  progress?: RunProgress;
 }
 
 /** Which Galaxy job or workflow invocation, without its state. */
 export type GalaxyRunRef = Pick<GalaxyRun, "kind" | "id">;
+
+/** How far a workflow invocation has got, counted, as of a moment. */
+export interface RunProgress {
+  totalSteps: number;
+  completedSteps: number;
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  /** When these counts were taken, in epoch milliseconds. */
+  at: number;
+}
+
+/** One step of a workflow invocation, as Galaxy reported it. */
+export interface InvocationStep {
+  /** The step's place in the workflow, from 0 (Galaxy's `order_index`). */
+  index: number;
+  /** The step's label in the workflow, when it has one. */
+  label?: string;
+  /** Galaxy's scheduling state for the step (`new`, `scheduled`, …). */
+  state: string;
+  /**
+   * The jobs the step ran (several when it maps over a collection), with their
+   * states. Absent when Galaxy didn't list them: a read without step details
+   * leaves them out, so "no jobs listed" doesn't mean the step ran none.
+   */
+  jobs?: readonly { id: string; state: string }[];
+}
 
 /** Galaxy work that was started and hasn't been reported finished yet. */
 export interface GalaxyWork {

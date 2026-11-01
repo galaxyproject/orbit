@@ -13,6 +13,7 @@ import { EMPTY_NAMES, learnNames } from "../app/src/renderer/whats-happening/cor
 import { rowsOf } from "../app/src/renderer/whats-happening/core/rows.js";
 import {
   failureReason,
+  invocationsSeen,
   producedRefs,
   producedSummary,
   startedWork,
@@ -763,7 +764,9 @@ describe("advance: rows follow their Galaxy jobs", () => {
     expect(entry.status).toBe("untracked");
     expect(entry.endedAt).toBe(9);
     // The last state Galaxy reported is kept, so the view can say "last seen running".
-    expect(entry.galaxy).toEqual([{ kind: "job", id: "j1", state: "running", untracked: true }]);
+    expect(entry.startedRuns).toEqual([
+      { kind: "job", id: "j1", state: "running", untracked: true },
+    ]);
     expect(currentStatus(state)).toBeNull();
   });
 
@@ -1895,5 +1898,151 @@ describe("rows: a failed try and its retry", () => {
   it("folds a failed upload into the upload of the same file", () => {
     const rows = rowsFor([...upload("u1", 1, "a.bed", true), ...upload("u2", 3, "a.bed", false)]);
     expect(shape(rows)).toEqual([["u2", "done", ["u1"], []]]);
+  });
+});
+
+describe("workflow runs, step by step", () => {
+  const galaxyStep = (index: number, label: string | null, jobs: [string, string][]) => ({
+    id: `s${index}`,
+    order_index: index,
+    workflow_step_label: label,
+    state: "scheduled",
+    jobs: jobs.map(([id, state]) => ({ id, state })),
+  });
+  const detail = (jobs3: string, jobs4: string[]) => ({
+    data: {
+      id: "inv1",
+      state: "scheduled",
+      steps: [
+        galaxyStep(0, "Input File to duplicate", []),
+        galaxyStep(1, "How Many Files", []),
+        galaxyStep(2, "Duplicate file to collection", [["j3", jobs3]]),
+        galaxyStep(
+          3,
+          "First Select (2)",
+          jobs4.map((s, i): [string, string] => [`j4-${i}`, s]),
+        ),
+        galaxyStep(4, null, []),
+      ],
+    },
+    success: true,
+  });
+  const invoked: NarrationEvent[] = [
+    { kind: "group-start", groupId: "m1", at: 0 },
+    { id: "w1", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1 },
+    {
+      id: "w1",
+      toolName: "invoke_workflow",
+      phase: "end",
+      groupId: "m1",
+      at: 2,
+      result: { data: { id: "inv1", state: "new" }, success: true },
+    },
+  ];
+  const run = (state: NarrationState) => state.groups[0].entries[0].startedRuns?.[0];
+
+  it("reads the steps of a detailed invocation, with each step's jobs", () => {
+    const [found] = invocationsSeen(detail("ok", ["running", "queued"]));
+    expect(found).toMatchObject({ kind: "invocation", id: "inv1", state: "scheduled" });
+    expect(found.steps?.map((s) => [s.index, s.label, s.jobs?.map((j) => j.state)])).toEqual([
+      [0, "Input File to duplicate", undefined],
+      [1, "How Many Files", undefined],
+      [2, "Duplicate file to collection", ["ok"]],
+      [3, "First Select (2)", ["running", "queued"]],
+      [4, undefined, undefined],
+    ]);
+    expect(invocationsSeen({ data: { id: "inv1", state: "new" }, success: true })).toEqual([]);
+  });
+
+  it("learns a run's steps when the agent reads the invocation, without changing its state", () => {
+    const state = play([
+      ...invoked,
+      { id: "c1", toolName: "get_invocations", phase: "start", groupId: "m1", at: 3 },
+      {
+        id: "c1",
+        toolName: "get_invocations",
+        phase: "end",
+        groupId: "m1",
+        at: 4,
+        result: detail("ok", ["running", "queued"]),
+      },
+    ]);
+    expect(run(state)?.state).toBe("new");
+    expect(run(state)?.steps?.[3].jobs?.map((j) => j.state)).toEqual(["running", "queued"]);
+    expect(state.groups[0].entries[0].status).toBe("running");
+  });
+
+  it("keeps what a read saw of a workflow run it never saw start", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "c1", toolName: "get_invocations", phase: "start", groupId: "m1", at: 1 },
+      {
+        id: "c1",
+        toolName: "get_invocations",
+        phase: "end",
+        groupId: "m1",
+        at: 2,
+        result: detail("ok", ["ok", "error"]),
+      },
+    ]);
+    const [read] = state.groups[0].entries;
+    expect(read.status).toBe("done");
+    expect(read.seenRuns?.map((r) => [r.kind, r.id, r.state, r.steps?.length])).toEqual([
+      ["invocation", "inv1", "scheduled", 5],
+    ]);
+  });
+
+  it("takes a run's counted progress from a job-state, while it is still going", () => {
+    const progress = {
+      totalSteps: 29,
+      completedSteps: 4,
+      totalJobs: 11,
+      completedJobs: 4,
+      failedJobs: 0,
+      at: 8,
+    };
+    const state = play([
+      ...invoked,
+      { kind: "job-state", at: 9, id: "inv1", state: "scheduled", progress },
+    ]);
+    expect(run(state)).toMatchObject({ state: "scheduled", progress });
+    expect(state.groups[0].entries[0].status).toBe("running");
+  });
+
+  it("keeps the jobs it knows when a later read lists the steps without them", () => {
+    const withJobs = detail("ok", ["ok", "ok"]);
+    const withoutJobs = {
+      ...withJobs,
+      data: { ...withJobs.data, steps: withJobs.data.steps.map((s) => ({ ...s, jobs: [] })) },
+    };
+    const read = (id: string, at: number, result: unknown): ToolEvent[] => [
+      { id, toolName: "get_invocations", phase: "start", groupId: "m1", at },
+      { id, toolName: "get_invocations", phase: "end", groupId: "m1", at: at + 1, result },
+    ];
+    const state = play([...invoked, ...read("c1", 3, withJobs), ...read("c2", 5, withoutJobs)]);
+    expect(run(state)?.steps?.map((s) => s.jobs?.length)).toEqual([
+      undefined,
+      undefined,
+      1,
+      2,
+      undefined,
+    ]);
+    // What the second read saw on its own: steps without their jobs.
+    expect(state.groups[0].entries[2].seenRuns?.[0].steps?.every((s) => s.jobs === undefined)).toBe(
+      true,
+    );
+  });
+
+  it("takes steps from a job-state, and names the step a failed run failed at", () => {
+    const steps = invocationsSeen(detail("ok", ["ok", "error"]))[0].steps;
+    const state = play([
+      ...invoked,
+      { kind: "job-state", at: 9, id: "inv1", state: "failed", steps },
+    ]);
+    expect(run(state)?.steps).toEqual(steps);
+    expect(state.groups[0].entries[0]).toMatchObject({
+      status: "failed",
+      detail: "The workflow run failed at step 4 (First Select (2))",
+    });
   });
 });

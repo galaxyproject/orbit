@@ -24,6 +24,7 @@ import {
   envelopeOf,
   failureMessage,
   failureReason,
+  invocationsSeen,
   producedRefs,
   producedSummary,
   startedWork,
@@ -34,6 +35,7 @@ import type {
   GalaxyRun,
   GalaxyRunRef,
   GroupMessage,
+  InvocationStep,
   NameMemory,
   NarrationEntry,
   NarrationEvent,
@@ -211,7 +213,10 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       return { ...state, galaxyRunning: state.galaxyRunning.filter((w) => w !== drop) };
     }
     case "job-state":
-      return applyJobState(state, event.id, event.state, event.at);
+      return applyJobState(state, event.id, event.state, event.at, {
+        steps: event.steps,
+        progress: event.progress,
+      });
   }
 }
 
@@ -231,7 +236,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
       entries = entries.map((e) => (e.id === event.id ? finishEntry(e, event) : e));
     }
     const entry = entries.find((e) => e.id === event.id);
-    const stillRunning = lastOf(entries, (e) => e.status === "running" && !e.galaxy);
+    const stillRunning = lastOf(entries, (e) => e.status === "running" && !e.startedRuns);
     let now: NowLine | null = null;
     if (event.phase === "start") {
       // A call started: say what it is doing.
@@ -266,7 +271,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
         next = updateAt(next, index, (g) => ({
           ...g,
           entries: g.entries.map((e) =>
-            e.id === event.id ? settle({ ...e, galaxy: runs }, event.at) : e,
+            e.id === event.id ? settle({ ...e, startedRuns: runs }, event.at) : e,
           ),
         }));
         const pending = runs.filter((r) => !runFinished(r));
@@ -288,8 +293,45 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
   if (event.phase === "end" && !event.isError) {
     const names = learnNames(next.names, event.toolName, event.result);
     if (names !== next.names) next = { ...next, names };
+    // A read of a workflow run's details tells its steps.
+    for (const run of invocationsSeen(event.result)) {
+      next = withRunSteps(next, run.id, run.steps ?? []);
+    }
   }
   return next;
+}
+
+/** Puts a workflow invocation's steps on its run; the same state when nothing changed. */
+function withRunSteps(
+  state: NarrationState,
+  id: string,
+  steps: readonly InvocationStep[],
+): NarrationState {
+  const target = (r: GalaxyRun): boolean =>
+    r.kind === "invocation" &&
+    r.id === id &&
+    JSON.stringify(r.steps) !== JSON.stringify(mergedSteps(r.steps, steps));
+  if (!state.groups.some((g) => g.entries.some((e) => e.startedRuns?.some(target)))) return state;
+  return {
+    ...state,
+    groups: state.groups.map((g) =>
+      g.entries.some((e) => e.startedRuns?.some(target))
+        ? {
+            ...g,
+            entries: g.entries.map((e) =>
+              e.startedRuns?.some(target)
+                ? {
+                    ...e,
+                    startedRuns: e.startedRuns.map((r) =>
+                      target(r) ? { ...r, steps: mergedSteps(r.steps, steps) } : r,
+                    ),
+                  }
+                : e,
+            ),
+          }
+        : g,
+    ),
+  };
 }
 
 /**
@@ -320,7 +362,7 @@ function runFailed(run: GalaxyRun): boolean {
  * let go before it ended, else done. A call that itself failed stays failed.
  */
 function settle(entry: NarrationEntry, at: number): NarrationEntry {
-  const runs = entry.galaxy ?? [];
+  const runs = entry.startedRuns ?? [];
   if (runs.length === 0 || entry.status === "failed") return entry;
   if (!runs.every(runFinished)) {
     const { endedAt: _notYet, ...rest } = entry;
@@ -331,6 +373,29 @@ function settle(entry: NarrationEntry, at: number): NarrationEntry {
   }
   const status = runs.some((r) => !runEnded(r)) ? "untracked" : "done";
   return { ...entry, status, endedAt: at };
+}
+
+/**
+ * A run's newer steps, keeping the jobs an earlier report listed for a step
+ * the newer one reports without them.
+ */
+function mergedSteps(
+  known: readonly InvocationStep[] | undefined,
+  newer: readonly InvocationStep[],
+): InvocationStep[] {
+  return newer.map((step) => {
+    const jobs = step.jobs ?? known?.find((s) => s.index === step.index)?.jobs;
+    return jobs ? { ...step, jobs } : step;
+  });
+}
+
+/** The first step of a workflow run with a failed job, as "step 4 (First Select)". */
+function failedStep(run: GalaxyRun): string | undefined {
+  const step = [...(run.steps ?? [])]
+    .sort((a, b) => a.index - b.index)
+    .find((s) => s.jobs?.some((j) => isJobTerminal(j.state) && !isJobSuccess(j.state)));
+  if (!step) return undefined;
+  return `step ${step.index + 1}${step.label ? ` (${step.label})` : ""}`;
 }
 
 /** Galaxy's states for a job or invocation that was stopped rather than failing on its own. */
@@ -361,7 +426,9 @@ function runsFailedLine(runs: readonly GalaxyRun[]): string {
         : failed.length === all.length
           ? `All ${all.length} ${many}`
           : `${failed.length} of ${all.length} ${many}`;
-    parts.push(`${who} ${verb}`);
+    // A single workflow run that failed says at which step, when its steps are known.
+    const step = all.length === 1 && verb === "failed" ? failedStep(failed[0]) : undefined;
+    parts.push(`${who} ${verb}${step ? ` at ${step}` : ""}`);
   }
   return parts.join("; ");
 }
@@ -371,23 +438,32 @@ function applyJobState(
   id: string,
   galaxyState: string,
   at: number,
+  extra: Pick<GalaxyRun, "steps" | "progress"> = {},
 ): NarrationState {
   let touched = false;
   const groups = state.groups.map((g) => {
-    if (!g.entries.some((e) => e.galaxy?.some((r) => r.id === id))) return g;
+    if (!g.entries.some((e) => e.startedRuns?.some((r) => r.id === id))) return g;
     touched = true;
     return {
       ...g,
       entries: g.entries.map((e) => {
-        if (!e.galaxy?.some((r) => r.id === id)) return e;
-        const galaxy = e.galaxy.map((r) => {
+        if (!e.startedRuns?.some((r) => r.id === id)) return e;
+        const startedRuns = e.startedRuns.map((r) => {
           if (r.id !== id) return r;
           // Letting go keeps the last state Galaxy reported, so the view can say "last seen running".
+          const withSteps =
+            r.kind === "invocation"
+              ? {
+                  ...r,
+                  ...(extra.steps ? { steps: mergedSteps(r.steps, extra.steps) } : {}),
+                  ...(extra.progress ? { progress: extra.progress } : {}),
+                }
+              : r;
           return galaxyState === "untracked"
-            ? { ...r, untracked: true }
-            : { ...r, state: galaxyState };
+            ? { ...withSteps, untracked: true }
+            : { ...withSteps, state: galaxyState };
         });
-        return settle({ ...e, galaxy }, at);
+        return settle({ ...e, startedRuns }, at);
       }),
     };
   });
@@ -501,7 +577,7 @@ function groupsThatStarted(state: NarrationState, runs: readonly GalaxyRunRef[])
   const started = (r: GalaxyRun): boolean =>
     runs.some((ref) => ref.kind === r.kind && ref.id === r.id);
   return state.groups
-    .filter((g) => g.entries.some((e) => e.galaxy?.some(started)))
+    .filter((g) => g.entries.some((e) => e.startedRuns?.some(started)))
     .map((g) => g.id);
 }
 
@@ -622,12 +698,15 @@ function finishEntry(entry: NarrationEntry, event: ToolEvent): NarrationEntry {
       ...(message ? { failureMessage: message } : {}),
     };
   }
+  // A read of a workflow run keeps what it saw, even for a run started elsewhere.
+  const seenRuns = invocationsSeen(event.result);
+  const read = seenRuns.length > 0 ? { ...entry, seenRuns } : entry;
   const produced = producedRefs(event.toolName, event.result);
-  if (produced.length === 0) return entry;
+  if (produced.length === 0) return read;
   const detail = producedSummary(produced);
   return {
-    ...entry,
-    galaxyRefs: [...entry.galaxyRefs, ...produced],
+    ...read,
+    galaxyRefs: [...read.galaxyRefs, ...produced],
     ...(detail ? { detail } : {}),
   };
 }
