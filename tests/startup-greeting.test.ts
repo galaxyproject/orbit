@@ -75,7 +75,7 @@ describe("sendStartupGreeting (dispatch)", () => {
 
   function fakes() {
     const pi = { sendUserMessage: vi.fn() };
-    const ctx = { ui: { notify: vi.fn() } };
+    const ctx = { mode: "rpc", hasUI: true, ui: { notify: vi.fn() } };
     return { pi, ctx };
   }
 
@@ -132,5 +132,24 @@ describe("sendStartupGreeting (dispatch)", () => {
     expect(ctx.ui.notify).toHaveBeenCalledTimes(1);
     expect(ctx.ui.notify.mock.calls[0][1]).toBe("info");
     expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  // #424: print/json modes prompt the session right after session_start, so a
+  // greeting turn started here makes their prompt fail as "already processing".
+  it.each(["print", "json"])("usable but %s mode -> no model turn", (mode) => {
+    process.env.GALAXY_URL = "https://example-fake-galaxy.invalid";
+    process.env.GALAXY_API_KEY = "dummy-fake-key";
+    const { pi, ctx } = fakes();
+    sendStartupGreeting(pi as never, { ...ctx, mode, hasUI: false } as never);
+    expect(pi.sendUserMessage).not.toHaveBeenCalled();
+  });
+
+  // A shell host with no dialogs (the browser's) is still a UI the user reads.
+  it("usable, rpc mode without dialogs -> still greets", () => {
+    process.env.GALAXY_URL = "https://example-fake-galaxy.invalid";
+    process.env.GALAXY_API_KEY = "dummy-fake-key";
+    const { pi, ctx } = fakes();
+    sendStartupGreeting(pi as never, { ...ctx, hasUI: false } as never);
+    expect(pi.sendUserMessage).toHaveBeenCalledTimes(1);
   });
 });
