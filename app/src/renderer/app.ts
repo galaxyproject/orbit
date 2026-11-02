@@ -67,6 +67,7 @@ import type { ProviderAuthCaps } from "../../../shared/provider-auth-caps.js";
 import { splitApprovalPrompt } from "../../../shared/approval-prompt.js";
 import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.js";
 import { createModalClaim } from "./ext-modal-claim.js";
+import { createOrbitNarration } from "./whats-happening-orbit.js";
 
 declare global {
   interface Window {
@@ -140,6 +141,14 @@ const modelIndicatorNameEl = document.getElementById("model-indicator-name")!;
 
 const chat = new ChatPanel(messagesEl);
 const artifacts = new ArtifactPanel();
+// What's Happening: what Orbit is doing in Galaxy, narrated from its events.
+const whatsHappening = createOrbitNarration({
+  readFile: (path, opts) => window.orbit.readFile(path, opts),
+  describeModelError: (message) =>
+    humanizeAgentError(message, {
+      contextWindow: knownContextWindowFor(currentProvider, currentModel),
+    }).text,
+});
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.
@@ -2014,6 +2023,7 @@ function submit(): void {
 
 function dispatchSubmittedText(text: string): void {
   handledPromptPending = false;
+  whatsHappening.onUserText(text);
   // Slash commands handled locally may run without an LLM round-trip. Commands
   // that do call the agent run here only after the current turn is idle.
   if (text.startsWith("/") && handleSlashCommand(text)) return;
@@ -2865,6 +2875,7 @@ window.orbit.onAgentEvent((event) => {
 
   // Feed the agent shell with interesting events
   feedShell(event);
+  whatsHappening.onAgentEvent(event);
 
   switch (type) {
     case "response":
@@ -3269,6 +3280,7 @@ window.orbit.onUiRequest((request) => {
   if (method === "notify") {
     const message = (request as Record<string, unknown>).message as string | undefined;
     const notifyType = (request as Record<string, unknown>).notifyType as string | undefined;
+    whatsHappening.onNotify(message);
     if (message) {
       const escaped = message.replace(/</g, "&lt;");
       // Preserve newlines + indentation for multi-line status/profile dumps.
