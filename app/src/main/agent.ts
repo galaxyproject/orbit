@@ -17,7 +17,7 @@ import {
   appendStderr,
 } from "../../../shared/brain-exit.js";
 import { noLocalShellSpawnExtras } from "./local-shell.js";
-import { TurnWatchdog } from "./turn-watchdog.js";
+import { TurnWatchdog, type TurnStallKind } from "./turn-watchdog.js";
 import { promptStartsNoTurn } from "../../../shared/handled-prompt.js";
 import { formatWindowTitle } from "./window-title.js";
 import { isOAuthOnlyProvider } from "./oauth-handler.js";
@@ -30,6 +30,17 @@ import { DESKTOP_SHELL_KIND, readEnv, writeEnv } from "../../../shared/orbit-env
  * a fresh window so the provider connection has time to recover.
  */
 export const TURN_SILENCE_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a single compaction may run before Orbit gives up on it (#616). The
+ * brain is silent for the whole summarization call, and on a local model that
+ * means re-reading a context of up to ~200K tokens at 180-460 tok/s (up to ~20
+ * minutes) and then decoding a summary of up to ~16K tokens at ~17 tok/s (another
+ * ~15). Reported local compactions ran about an hour once the re-prefill that
+ * follows is counted; 90 minutes covers the in-window ~35 with room for slower
+ * hardware and thinking models, while still freeing a truly wedged session.
+ */
+export const COMPACTION_TIMEOUT_MS = 90 * 60_000;
 
 const PROVIDER_ENV_MAP: Record<string, string> = {
   anthropic: "ANTHROPIC_API_KEY",
@@ -121,8 +132,9 @@ const NODE_BIN = resolveNodeBin();
 export type AgentStatus = "running" | "stopped" | "error";
 
 /**
- * Rejection for commands still in flight when stop() kills the brain. Typed so
- * callers can tell a stop they (or a restart) asked for apart from a failure.
+ * Rejection for commands still in flight when the brain goes away, whether
+ * stop() killed it or it exited on its own. Typed so callers can tell it apart
+ * from a failure: the status change or the stall watchdog reports the outcome.
  */
 export class AgentStoppedError extends Error {
   constructor() {
@@ -209,7 +221,8 @@ export class AgentManager {
     this.cwd = cwd;
     this.watchdog = new TurnWatchdog({
       timeoutMs: TURN_SILENCE_TIMEOUT_MS,
-      onTimeout: () => this.handleTurnStalled(),
+      compactionTimeoutMs: COMPACTION_TIMEOUT_MS,
+      onTimeout: (kind) => this.handleTurnStalled(kind),
     });
     this.refreshWindowTitle();
   }
@@ -444,23 +457,29 @@ export class AgentManager {
       }
     }
 
-    const rl = createInterface({
-      input: this.process.stdout!,
-      terminal: false,
-    });
-
-    rl.on("line", (line) => this.handleLine(line));
-
-    this.process.stderr?.on("data", (chunk: Buffer) => {
-      const text = chunk.toString();
-      this.stderr = appendStderr(this.stderr, text);
-      log("stderr:", text.trimEnd());
-    });
-
     // Capture the spawned process so the exit handler doesn't clobber a newer one
     // (race: stop() spawns a new process, then the OLD process's exit fires later
     // and wipes this.process to null even though the new one is alive).
     const spawnedProcess = this.process;
+
+    const rl = createInterface({
+      input: spawnedProcess.stdout!,
+      terminal: false,
+    });
+
+    // Node can flush a crashed brain's stdout after 'exit'; a late compaction_start
+    // from it would put the replacement's watchdog into compaction mode (#616).
+    rl.on("line", (line) => {
+      if (this.process === spawnedProcess) this.handleLine(line);
+    });
+
+    spawnedProcess.stderr?.on("data", (chunk: Buffer) => {
+      const text = chunk.toString();
+      log("stderr:", text.trimEnd());
+      // Late stderr from a dead brain must not land in its replacement's crash summary.
+      if (this.process && this.process !== spawnedProcess) return;
+      this.stderr = appendStderr(this.stderr, text);
+    });
 
     spawnedProcess.on("exit", (code, signal) => {
       log("agent exited, code:", code, "signal:", signal, "pid:", spawnedProcess.pid);
@@ -469,6 +488,11 @@ export class AgentManager {
         return;
       }
       this.process = null;
+      this.watchdog.forgetCompaction();
+      // Its stdout is no longer read, so nothing else would ever settle these.
+      // Settle them as a stop (#564): a clean exit resets the turn UI through
+      // the "stopped" status, and after a crash the watchdog reports the lost turn.
+      this.rejectPendingResponses();
 
       // Clean exit (intentional stop, or normal termination).
       if (code === 0 || code === null) {
@@ -581,6 +605,10 @@ export class AgentManager {
     }
     this.pinnedSessionFile = null;
     this.setStatus("stopped");
+    this.rejectPendingResponses();
+  }
+
+  private rejectPendingResponses(): void {
     for (const [id, pending] of this.pendingResponses) {
       log("rejecting pending response:", id);
       pending.reject(new AgentStoppedError());
@@ -600,6 +628,8 @@ export class AgentManager {
     // for a silent stall. Other commands (abort, set_model, ...) don't.
     if (obj.type === "prompt") {
       this.watchdog.promptSent();
+    } else if (obj.type === "extension_ui_response") {
+      this.watchdog.dialogAnswered();
     }
   }
 
@@ -676,7 +706,7 @@ export class AgentManager {
     if (status === "stopped" || status === "error") {
       this.turnActive = false;
       // The process is gone; never let a pending watchdog fire against it.
-      this.watchdog.stop();
+      this.watchdog.reset();
     }
     log("status:", status, message || "");
     if (!this.window.isDestroyed()) {
@@ -691,15 +721,24 @@ export class AgentManager {
    * turn done, and best-effort tell the brain to abort so its streaming state
    * clears and the next prompt isn't queued behind a dead turn.
    */
-  private handleTurnStalled(): void {
-    log("turn stalled: no brain activity for", TURN_SILENCE_TIMEOUT_MS, "ms");
+  private handleTurnStalled(kind: TurnStallKind): void {
+    const compaction = kind === "compaction";
+    log(
+      compaction
+        ? "compaction stalled: no compaction_end for"
+        : "turn stalled: no brain activity for",
+      compaction ? COMPACTION_TIMEOUT_MS : TURN_SILENCE_TIMEOUT_MS,
+      "ms",
+    );
     this.turnActive = false;
     if (!this.window.isDestroyed()) {
       this.window.webContents.send("agent:event", {
         type: "error",
-        message:
-          "The assistant stopped responding for two minutes, so Orbit cancelled " +
-          "the request. Please try again.",
+        message: compaction
+          ? `Compacting the conversation stalled: it had not finished after ${COMPACTION_TIMEOUT_MS / 60_000} minutes, ` +
+            "so Orbit cancelled it. Please try again."
+          : "The assistant stopped responding for two minutes, so Orbit cancelled " +
+            "the request. Please try again.",
       });
     }
     // Best-effort: unstick pi's streaming state so the next prompt runs. If the
@@ -725,7 +764,7 @@ export class AgentManager {
 
     // Any line from the brain is a sign of life: reset/pause/disarm the stall
     // watchdog before we act on (or early-return from) this event.
-    this.watchdog.observe(type);
+    this.watchdog.observe(type, data.method as string | undefined);
 
     // send() armed the watchdog for this prompt, but a handled command or a
     // rejected prompt means no turn follows -- left armed, it would report a
