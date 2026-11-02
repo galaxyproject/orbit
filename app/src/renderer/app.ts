@@ -69,6 +69,7 @@ import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.j
 import { createModalClaim } from "./ext-modal-claim.js";
 import { createOrbitNarration } from "./whats-happening-orbit.js";
 import { chatInlineHook } from "./whats-happening-chat.js";
+import { mountWhatsHappeningList } from "./whats-happening-activity.js";
 
 declare global {
   interface Window {
@@ -151,6 +152,7 @@ const whatsHappening = createOrbitNarration({
     }).text,
 });
 chat.setUserMessageHook(chatInlineHook(whatsHappening));
+mountWhatsHappeningList(artifacts.getWhatsHappeningContainer(), whatsHappening);
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.

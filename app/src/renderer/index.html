@@ -416,10 +416,16 @@
               </div>
               <div id="activity-shell-section">
                 <div class="activity-section-header">
-                  <span>Shell</span>
-                  <button id="agent-shell-clear" title="Clear shell">clear</button>
+                  <span class="activity-view-toggle">
+                    <button class="active" data-activity-view="whats-happening">
+                      What's happening
+                    </button>
+                    <button data-activity-view="shell">Shell</button>
+                  </span>
+                  <button id="agent-shell-clear" class="hidden" title="Clear shell">clear</button>
                 </div>
-                <div id="agent-shell-body"></div>
+                <div id="whats-happening-view"></div>
+                <div id="agent-shell-body" class="hidden"></div>
               </div>
               <div id="activity-proc-section">
                 <div class="activity-section-header">
