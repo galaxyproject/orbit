@@ -171,6 +171,38 @@ describe("pi adapter", () => {
     ]);
   });
 
+  it("gives a message the run takes in mid-way its own group, and leaves Galaxy jobs where they started", () => {
+    const { events } = run([
+      { type: "agent_start" },
+      userMessage("Run cat on my reads", 111),
+      { type: "tool_execution_start", toolCallId: "c1", toolName: "run_tool", args: {} },
+      {
+        type: "tool_execution_end",
+        toolCallId: "c1",
+        toolName: "run_tool",
+        result: { structuredContent: { success: true, data: { jobs: [{ id: "j1" }] } } },
+      },
+      userMessage("How many histories do I have?", 222),
+      // The same message reported again stays in its group.
+      userMessage("How many histories do I have?", 222),
+      { type: "tool_execution_start", toolCallId: "c2", toolName: "get_histories", args: {} },
+      { type: "tool_execution_end", toolCallId: "c2", toolName: "get_histories", result: {} },
+      { type: "agent_end" },
+    ]);
+    const ended = events.reduce<NarrationState>(advance, EMPTY_STATE);
+    expect(ended.groups[0].entries[0].status).toBe("running");
+    const state = advance(ended, { kind: "job-state", at: 99_000, id: "j1", state: "ok" });
+
+    expect(state.groups.map((g) => [g.id, g.messages.map((m) => m.id), g.status])).toEqual([
+      ["run-1", ["111"], "done"],
+      ["run-2", ["222"], "done"],
+    ]);
+    expect(state.groups[0].entries.map((e) => [e.toolName, e.status])).toEqual([
+      ["run_tool", "done"],
+    ]);
+    expect(state.groups[1].entries.map((e) => e.toolName)).toEqual(["get_histories"]);
+  });
+
   it("stops the group on a runtime error, with what it said or a plain reason", () => {
     expect(
       run([{ type: "agent_start" }, { type: "error", message: "brain exited" }]).events[1],

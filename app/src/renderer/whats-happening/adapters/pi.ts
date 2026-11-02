@@ -12,10 +12,12 @@ import type { GalaxyRunRef, NarrationEvent, ToolEvent } from "../core/types.js";
 
 /** What the adapter remembers between events. */
 export interface PiAdapterState {
-  /** How many agent runs have started; each is one group. */
+  /** How many groups have started: one per agent run, plus one per message a run takes in mid-way. */
   runs: number;
   /** The group events go to now. */
   groupId: string;
+  /** The id of the message the current group works on ("" when it had none); undefined before one arrives. */
+  messageId?: string;
   /** pi said it will retry after a model error, so the next run continues the same group. */
   retrying: boolean;
   /** A model error from the end of the assistant's reply, said when the group ends. */
@@ -82,8 +84,9 @@ export function fromPiEvent(
   if (type === "agent_start") {
     // A retry after a model error carries on in the same group.
     if (state.retrying) return { state: { ...state, retrying: false }, events: [] };
+    const { messageId: _previous, ...rest } = state;
     const runs = state.runs + 1;
-    const next = { ...state, runs, groupId: `run-${runs}` };
+    const next = { ...rest, runs, groupId: `run-${runs}` };
     return { state: next, events: [{ kind: "group-start", groupId: next.groupId, at }] };
   }
 
@@ -119,20 +122,30 @@ export function fromPiEvent(
     const harness = options.harnessMessage?.(text);
     // pi's message has no id of its own; its timestamp tells messages apart.
     const stamp = (message as { timestamp?: unknown }).timestamp;
-    return {
-      state,
-      events: [
-        {
-          kind: "group-message",
-          groupId,
-          at,
-          text,
-          followUp: harness !== undefined,
-          ...(stamp !== undefined ? { messageId: String(stamp) } : {}),
-          ...(harness?.about?.length ? { about: harness.about } : {}),
-        },
-      ],
-    };
+    const messageId = stamp !== undefined ? String(stamp) : "";
+    const events: NarrationEvent[] = [];
+    let next: PiAdapterState = { ...state, messageId };
+    // A message queued while the run worked (pi takes it in before the run ends)
+    // is new work: it gets its own group. The same message seen again is not.
+    if (state.messageId !== undefined && (messageId === "" || messageId !== state.messageId)) {
+      const { modelError, ...rest } = state;
+      const runs = state.runs + 1;
+      next = { ...rest, runs, groupId: `run-${runs}`, messageId };
+      events.push(
+        { kind: "group-end", groupId, at, ...(modelError ? { error: modelError } : {}) },
+        { kind: "group-start", groupId: next.groupId, at },
+      );
+    }
+    events.push({
+      kind: "group-message",
+      groupId: next.groupId,
+      at,
+      text,
+      followUp: harness !== undefined,
+      ...(stamp !== undefined ? { messageId } : {}),
+      ...(harness?.about?.length ? { about: harness.about } : {}),
+    });
+    return { state: next, events };
   }
 
   if (type === "message_end" && message?.role === "assistant") {
