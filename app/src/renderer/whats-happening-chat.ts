@@ -15,7 +15,7 @@ import {
 } from "./whats-happening/views/whats-happening-inline.js";
 import type { NarrationState } from "./whats-happening/core/types.js";
 import type { UserMessageDrawn } from "./chat/chat-panel.js";
-import type { GalaxyLinkBuilder } from "./whats-happening/views/parts.js";
+import type { GalaxyLinkBuilder, MessageLabeler } from "./whats-happening/views/parts.js";
 import type { OrbitNarration } from "./whats-happening-orbit.js";
 
 /** One user bubble's line, and the text it is matched by. */
@@ -34,22 +34,34 @@ interface Approval {
 const rows = new WeakMap<WhatsHappeningInlineElement, HTMLElement>();
 const inChat = (el: WhatsHappeningInlineElement): boolean => rows.get(el)?.isConnected ?? false;
 
+/** What the chat gives What's Happening: its lines, and a way back to each message. */
+export interface ChatLines {
+  /** For `ChatPanel.setUserMessageHook`: puts a line under each user message. */
+  hook: (row: HTMLElement, message: UserMessageDrawn) => void;
+  /** A user message's number in the chat, for the Activity list's cards. */
+  messageLabel: MessageLabeler;
+  /** Scrolls the chat to a user message and highlights it for a moment. */
+  showMessage: (userMessageId: string) => void;
+}
+
 /**
- * Returns the hook for `ChatPanel.setUserMessageHook`. A replayed bubble without
- * an id stays unmatched, so a new message's work never lands under an old
- * bubble with the same words.
+ * The chat's What's Happening lines. A replayed bubble without an id stays
+ * unmatched, so a new message's work never lands under an old bubble with the
+ * same words.
  */
-export function chatInlineHook(
+export function createChatLines(
   narration: OrbitNarration,
   dock: HTMLElement,
   buildUrl?: GalaxyLinkBuilder,
-): (row: HTMLElement, message: UserMessageDrawn) => void {
+): ChatLines {
   const tag = defineWhatsHappeningInline();
   // Lines still waiting for their message, oldest first.
   let waiting: Line[] = [];
   let matched: WhatsHappeningInlineElement[] = [];
   let approvals: Approval[] = [];
   const taken = new Set<string>();
+  // Each user message's bubble row, by message id, once its line is matched.
+  const bubbles = new Map<string, HTMLElement>();
 
   /** A cleared chat (/new, /clear) takes its lines with it, docked ones too. */
   function prune(): void {
@@ -72,6 +84,8 @@ export function chatInlineHook(
         taken.add(message.id);
         line.el.userMessageId = message.id;
         matched.push(line.el);
+        const row = rows.get(line.el);
+        if (row) bubbles.set(message.id, row);
       }
     }
     approvals = approvals.filter(({ el, proposalId }) => {
@@ -93,7 +107,7 @@ export function chatInlineHook(
 
   narration.subscribe(update);
 
-  return (row, { text, replayed, id }) => {
+  const hook = (row: HTMLElement, { text, replayed, id }: UserMessageDrawn): void => {
     prune();
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
     el.hideIfNothingHappened = true;
@@ -117,9 +131,31 @@ export function chatInlineHook(
       taken.add(id);
       el.userMessageId = id;
       matched.push(el);
+      bubbles.set(id, row);
     } else if (!replayed && !approved) {
       waiting.push({ el, text });
     }
     update(narration.state);
   };
+
+  /** The bubble row still in the chat for a message, if any. */
+  const bubbleOf = (id: string): HTMLElement | undefined => {
+    const row = bubbles.get(id);
+    return row?.isConnected ? row : undefined;
+  };
+
+  return {
+    hook,
+    messageLabel: (id) => bubbleOf(id)?.dataset.promptNum,
+    showMessage: (id) => {
+      const row = bubbleOf(id);
+      if (!row) return;
+      row.scrollIntoView?.({ block: "center", behavior: "smooth" });
+      row.classList.add("wh-shown");
+      setTimeout(() => row.classList.remove("wh-shown"), SHOWN_FOR_MS);
+    },
+  };
 }
+
+/** How long a message the user asked to see stays highlighted, in milliseconds. */
+const SHOWN_FOR_MS = 1500;

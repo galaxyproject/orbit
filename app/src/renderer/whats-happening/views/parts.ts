@@ -24,6 +24,13 @@ import type {
 /** A Galaxy page for a ref, or undefined when the host can't link to it. */
 export type GalaxyLinkBuilder = (ref: GalaxyRef) => string | undefined;
 
+/**
+ * The host's short label for a user message, by its id, e.g. "3" for the third
+ * message in its chat. A card shows it as a button that fires `show-message`
+ * (detail: `{ userMessageId }`), so the host can take the user to the message.
+ */
+export type MessageLabeler = (userMessageId: string) => string | undefined;
+
 /** What every part needs to draw. */
 export interface DrawContext {
   state: NarrationState;
@@ -33,6 +40,8 @@ export interface DrawContext {
   assistantName?: string;
   /** Builds a link into Galaxy for a ref; without it, nothing is a link. */
   buildUrl?: GalaxyLinkBuilder;
+  /** The host's label for a user message (e.g. its number in the chat); without it, cards show none. */
+  messageLabel?: MessageLabeler;
   /** Whether a fold (by its key) is open: what the user last chose, else `byDefault`. */
   isOpen: (key: string, byDefault: boolean) => boolean;
   /** Remembers the user opening or closing a fold, so a redraw keeps it that way. */
@@ -47,6 +56,7 @@ export class NarrationView extends LitElement {
   static override properties = {
     state: { attribute: false },
     buildUrl: { attribute: false },
+    messageLabel: { attribute: false },
     assistantName: { type: String, attribute: "assistant-name" },
     now: { attribute: false },
   };
@@ -56,6 +66,8 @@ export class NarrationView extends LitElement {
   declare state: NarrationState;
   /** Builds a link into Galaxy for a ref; without it, nothing is a link. */
   declare buildUrl?: GalaxyLinkBuilder;
+  /** Labels a card's user message (e.g. its number in the chat), shown as a button; see `MessageLabeler`. */
+  declare messageLabel?: MessageLabeler;
   /** The assistant's name, e.g. "Orbit"; without it the wording stays neutral. */
   declare assistantName?: string;
   /** The clock, in epoch milliseconds; for tests. Left unset, the element keeps its own. */
@@ -78,6 +90,7 @@ export class NarrationView extends LitElement {
       now: this.now ?? Math.max(this.#clock, Date.now()),
       assistantName: this.assistantName,
       buildUrl: this.buildUrl,
+      messageLabel: this.messageLabel,
       isOpen: (key, byDefault) => this.#folds.get(key) ?? byDefault,
       setOpen: (key, open) => this.#folds.set(key, open),
     };

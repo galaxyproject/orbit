@@ -69,7 +69,7 @@ import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.j
 import { createModalClaim } from "./ext-modal-claim.js";
 import { galaxyArtifactUrl } from "../../../shared/galaxy-artifact-links.js";
 import { createOrbitNarration } from "./whats-happening-orbit.js";
-import { chatInlineHook } from "./whats-happening-chat.js";
+import { createChatLines } from "./whats-happening-chat.js";
 import { mountWhatsHappeningList } from "./whats-happening-activity.js";
 import type { GalaxyLinkBuilder } from "./whats-happening/views/parts.js";
 
@@ -158,14 +158,18 @@ const whatsHappening = createOrbitNarration({
 let whatsHappeningServer: string | null = null;
 const whatsHappeningLink: GalaxyLinkBuilder = (ref) =>
   galaxyArtifactUrl(whatsHappeningServer, ref.kind, ref.id) ?? undefined;
-chat.setUserMessageHook(
-  chatInlineHook(
-    whatsHappening,
-    document.getElementById("whats-happening-dock")!,
-    whatsHappeningLink,
-  ),
+const whatsHappeningChat = createChatLines(
+  whatsHappening,
+  document.getElementById("whats-happening-dock")!,
+  whatsHappeningLink,
 );
-mountWhatsHappeningList(artifacts.getWhatsHappeningContainer(), whatsHappening, whatsHappeningLink);
+chat.setUserMessageHook(whatsHappeningChat.hook);
+mountWhatsHappeningList(
+  artifacts.getWhatsHappeningContainer(),
+  whatsHappening,
+  whatsHappeningLink,
+  whatsHappeningChat,
+);
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.

@@ -66,7 +66,7 @@ export function card(
   followUps: readonly NarrationGroup[] = [],
 ): TemplateResult {
   const header = html`<header>
-    <span>${cardTitle(group, ctx)}</span>
+    <span>${messageButton(group, ctx)}${cardTitle(group, ctx)}</span>
     <span class="state">${cardState(group, ctx, followUps)}</span>
   </header>`;
   const body = cardBody(group, ctx, followUps);
@@ -84,6 +84,28 @@ export function card(
       hasRows ? fold(`card:${group.id}`, false, html`${summary}`, body, ctx, "summary") : nothing
     }
   </section>`;
+}
+
+/**
+ * The host's label for the user message a card serves (e.g. its number in the
+ * chat), as a button asking the host to show that message. Nothing when the
+ * host gives no label, or no user message is behind the card.
+ */
+function messageButton(group: NarrationGroup, ctx: DrawContext): TemplateResult | typeof nothing {
+  const id = anchorUserMessage(ctx.state, group)?.id;
+  const label = id ? ctx.messageLabel?.(id) : undefined;
+  if (!id || !label) return nothing;
+  const show = (event: Event) =>
+    event.currentTarget?.dispatchEvent(
+      new CustomEvent("show-message", {
+        detail: { userMessageId: id },
+        bubbles: true,
+        composed: true,
+      }),
+    );
+  return html`<button class="message" title="Show this message in the chat" @click=${show}>
+    ${label}
+  </button>`;
 }
 
 /** Done or stopped, with no Galaxy work of its own still running. */
@@ -375,6 +397,20 @@ export const cardStyles = css`
     justify-content: space-between;
     gap: 12px;
     font-weight: 600;
+  }
+  .card header .message {
+    margin-right: 6px;
+    padding: 0 6px;
+    border: 1px solid var(--wh-border, rgba(127, 127, 127, 0.4));
+    border-radius: 5px;
+    background: none;
+    color: inherit;
+    font: inherit;
+    font-size: 0.85em;
+    cursor: pointer;
+  }
+  .card header .message:hover {
+    border-color: currentColor;
   }
   .card .state {
     flex: none;

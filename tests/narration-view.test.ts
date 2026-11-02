@@ -294,6 +294,30 @@ describe("<whats-happening> cards", () => {
   });
 });
 
+describe("<whats-happening> message labels", () => {
+  it("shows the host's label for a card's message, and asks the host to show it when clicked", async () => {
+    const state = play([
+      ...asked("m1", "Trim the reads", 0, "u1"),
+      { kind: "group-end", groupId: "m1", at: 1_000 },
+    ]);
+    const el = await mount({
+      state,
+      now: 2_000,
+      messageLabel: (id) => (id === "u1" ? "3" : undefined),
+    });
+    const button = el.shadowRoot!.querySelector<HTMLButtonElement>("header button.message")!;
+    expect(button.textContent?.trim()).toBe("3");
+    const shown: string[] = [];
+    el.addEventListener("show-message", (e) => shown.push((e as CustomEvent).detail.userMessageId));
+    button.click();
+    expect(shown).toEqual(["u1"]);
+
+    // Without a label from the host, no button.
+    const bare = await mount({ state, now: 2_000 });
+    expect(bare.shadowRoot!.querySelector("button.message")).toBeNull();
+  });
+});
+
 describe("<whats-happening> workflow runs", () => {
   const buildUrl = (ref: { kind: string; id: string }) =>
     `https://galaxy.test/${ref.kind}/${ref.id}`;

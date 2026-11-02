@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 import { describe, expect, it } from "vitest";
 
-import { chatInlineHook } from "../app/src/renderer/whats-happening-chat.js";
+import { createChatLines } from "../app/src/renderer/whats-happening-chat.js";
 import { createOrbitNarration } from "../app/src/renderer/whats-happening-orbit.js";
 import type { WhatsHappeningInlineElement } from "../app/src/renderer/whats-happening/views/whats-happening-inline.js";
 
@@ -17,10 +17,12 @@ function chat() {
   document.body.append(container, dock);
   const buildUrl = (ref: { kind: string; id: string }) =>
     `https://galaxy.test/${ref.kind}/${ref.id}`;
-  const hook = chatInlineHook(narration, dock, buildUrl);
+  const lines = createChatLines(narration, dock, buildUrl);
+  const hook = lines.hook;
   const message = (text: string, replayed = false, id?: string): WhatsHappeningInlineElement => {
     const el = document.createElement("div");
     el.className = "user-turn";
+    el.dataset.promptNum = String(container.querySelectorAll(".user-turn").length + 1);
     container.append(el);
     hook(el, { text, replayed, ...(id ? { id } : {}) });
     // Slash commands' lines go under their bubble; /approve's, like messages', to the dock.
@@ -36,7 +38,7 @@ function chat() {
       message: { role: "user", content: [{ type: "text", text }], timestamp },
     });
   };
-  return { narration, container, dock, message, piSees };
+  return { narration, container, dock, message, piSees, lines };
 }
 
 describe("What's Happening under Orbit's chat messages", () => {
@@ -144,6 +146,22 @@ describe("What's Happening under Orbit's chat messages", () => {
       },
     });
     expect(approve.userMessageId).toBeUndefined();
+  });
+
+  it("gives each matched message its number in the chat, and shows its bubble when asked", () => {
+    const { message, piSees, lines, container } = chat();
+    message("Trim the reads");
+    message("Align them");
+    piSees("Trim the reads", 1);
+    piSees("Align them", 2);
+    expect([lines.messageLabel("1"), lines.messageLabel("2"), lines.messageLabel("9")]).toEqual([
+      "1",
+      "2",
+      undefined,
+    ]);
+    lines.showMessage("2");
+    const second = container.querySelectorAll(".user-turn")[1];
+    expect(second.classList.contains("wh-shown")).toBe(true);
   });
 
   it("forgets lines a cleared chat took away, docked ones too", () => {

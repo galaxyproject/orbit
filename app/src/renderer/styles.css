@@ -1261,6 +1261,12 @@ body.platform-darwin #files-title {
   margin: 6px 0;
 }
 
+/* A user message What's Happening was asked to show, highlighted for a moment. */
+.user-turn.wh-shown .message.user {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 /* What's Happening's line for a user message: what Orbit did for it. */
 .wh-inline {
   display: block;
