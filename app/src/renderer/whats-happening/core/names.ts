@@ -10,7 +10,13 @@ import { operationFor } from "./catalog.js";
 import { envelopeOf } from "./results.js";
 import type { NameMemory, NamedItem } from "./types.js";
 
-export const EMPTY_NAMES: NameMemory = { tools: {}, datasets: {}, collections: {}, histories: {} };
+export const EMPTY_NAMES: NameMemory = {
+  tools: {},
+  datasets: {},
+  collections: {},
+  histories: {},
+  workflows: {},
+};
 
 /** How far into a result to look for named records, and how many to take from one result. */
 const MAX_DEPTH = 3;
@@ -18,8 +24,9 @@ const MAX_RECORDS = 2000;
 
 /**
  * Learns names from a successful call's result. Datasets and collections are
- * told apart by Galaxy's own `history_content_type` / `model_class`; tools and
- * histories by the galaxy-ops domain of the operation that returned them.
+ * told apart by Galaxy's own `history_content_type` / `model_class`; tools,
+ * histories and workflows by the galaxy-ops domain of the operation that
+ * returned them.
  * Returns the same memory when nothing new was learned.
  */
 export function learnNames(names: NameMemory, toolName: string, result: unknown): NameMemory {
@@ -31,6 +38,7 @@ export function learnNames(names: NameMemory, toolName: string, result: unknown)
     datasets: { ...names.datasets },
     collections: { ...names.collections },
     histories: { ...names.histories },
+    workflows: { ...names.workflows },
   };
   let changed = false;
   for (const record of namedRecords(envelope.data)) {
@@ -49,6 +57,8 @@ export function learnNames(names: NameMemory, toolName: string, result: unknown)
       into = learned.tools;
     } else if (domain === "histories" && hid === undefined) {
       into = learned.histories;
+    } else if (domain === "workflows") {
+      into = learned.workflows;
     }
     if (!into || JSON.stringify(into[id]) === JSON.stringify(value)) continue;
     (into as Record<string, typeof value>)[id] = value;

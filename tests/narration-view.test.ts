@@ -449,6 +449,72 @@ describe("<whats-happening-inline>", () => {
     expect(line(after)).toBe("✅ Done in 7s · 1 change to your Galaxy · Orbit followed up (1)");
   });
 
+  it("says what Galaxy is running, with the harness's label, and counts its jobs", async () => {
+    const state = play([
+      ...asked("m1", "Run my workflow", 0, "u1"),
+      { id: "w", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1_000, args: {} },
+      {
+        id: "w",
+        toolName: "invoke_workflow",
+        phase: "end",
+        groupId: "m1",
+        at: 2_000,
+        result: { success: true, data: { id: "i1", state: "new" } },
+      },
+      { kind: "group-end", groupId: "m1", at: 3_000 },
+      { kind: "run-labeled", at: 3_000, id: "i1", label: "Trim and count" },
+      {
+        kind: "job-state",
+        at: 30_000,
+        id: "i1",
+        state: "scheduled",
+        progress: {
+          totalSteps: 5,
+          completedSteps: 3,
+          totalJobs: 5,
+          completedJobs: 3,
+          failedJobs: 0,
+          at: 30_000,
+        },
+      },
+    ]);
+    const el = await inline({ state, now: 60_000, userMessageId: "u1" });
+    expect(line(el)).toBe('⏳ Running a workflow · "Trim and count" · 3 of 5 jobs · 1m 00s so far');
+  });
+
+  it("counts a tool run's jobs when it has several, and not when it has one", async () => {
+    const ran = (jobs: { id: string }[]): NarrationEvent[] => [
+      ...asked("m1", "Trim the reads", 0, "u1"),
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 1_000,
+        args: { tool_id: "fastp" },
+      },
+      {
+        id: "t",
+        toolName: "run_tool",
+        phase: "end",
+        groupId: "m1",
+        at: 2_000,
+        result: { success: true, data: { jobs, outputs: [] } },
+      },
+      { kind: "group-end", groupId: "m1", at: 3_000 },
+    ];
+    const several = play([
+      ...ran([{ id: "j1" }, { id: "j2" }, { id: "j3" }]),
+      { kind: "job-state", at: 20_000, id: "j1", state: "ok" },
+    ]);
+    const el = await inline({ state: several, now: 30_000, userMessageId: "u1" });
+    expect(line(el)).toBe("⏳ Running fastp · 1 of 3 jobs · 30s so far");
+
+    el.state = play(ran([{ id: "j1" }]));
+    await el.updateComplete;
+    expect(line(el)).toBe("⏳ Running fastp · 30s so far");
+  });
+
   it("shows one card, and notes any other work for the message instead of stacking it", async () => {
     const state = play([
       ...asked("m1", "Trim", 0, "u1"),

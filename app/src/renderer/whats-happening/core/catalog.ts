@@ -49,10 +49,11 @@ export function normalizeToolName(toolName: string): NormalizedToolName {
  * How a change is said while it runs, once it's done, and if it failed, from
  * the call's arguments and the names learned so far.
  */
+/** `running`: how a call is told once it has returned and Galaxy is doing the work, when that reads differently. */
 type Describer = (
   args: Record<string, unknown>,
   names: NameMemory | undefined,
-) => { now: string; done: string; failed: string };
+) => { now: string; running?: string; done: string; failed: string };
 
 const DESCRIBERS: Record<string, Describer> = {
   run_tool: (args, names) => {
@@ -88,11 +89,24 @@ const DESCRIBERS: Record<string, Describer> = {
           done: "Updated your history",
           failed: "Couldn't update your history",
         },
-  invoke_workflow: () => ({
-    now: "Starting a workflow run",
-    done: "Ran a workflow",
-    failed: "The workflow run failed",
-  }),
+  invoke_workflow: (args, names) => {
+    // Galaxy's run data has no name, so only a workflow read earlier gives it.
+    const known = typeof args.workflow_id === "string" && names?.workflows[args.workflow_id];
+    const workflow = known ? quoted(known) : "";
+    return workflow
+      ? {
+          now: `Starting ${workflow}`,
+          running: `Running ${workflow}`,
+          done: `Ran ${workflow}`,
+          failed: `${workflow} failed`,
+        }
+      : {
+          now: "Starting a workflow run",
+          running: "Running a workflow",
+          done: "Ran a workflow",
+          failed: "The workflow run failed",
+        };
+  },
   cancel_workflow_invocation: () => ({
     now: "Cancelling a workflow run",
     done: "Cancelled a workflow run",
@@ -272,6 +286,19 @@ export function describeFailedCall(
 ): string | undefined {
   const describer = DESCRIBERS[normalizeToolName(toolName).name];
   return describer?.(isPlainObject(args) ? args : {}, names).failed;
+}
+
+/**
+ * How a call is told once it has returned and Galaxy is doing the work
+ * ("Running a workflow"), or undefined when its title reads the same.
+ */
+export function describeRunningCall(
+  toolName: string,
+  args?: unknown,
+  names?: NameMemory,
+): string | undefined {
+  return DESCRIBERS[normalizeToolName(toolName).name]?.(isPlainObject(args) ? args : {}, names)
+    .running;
 }
 
 /** The opening sentence of an operation's summary, without code marks or the closing period. */

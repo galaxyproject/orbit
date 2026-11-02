@@ -160,8 +160,11 @@ function changeRow(row: NarrationRow, ctx: DrawContext): TemplateResult {
     entry.galaxyRefs.filter((r) => r.role === "output" && r.kind === kind),
   );
   const lost = entry.startedRuns?.find((r) => r.untracked);
+  // The harness's own description of the run, quoted so it isn't read as the workflow's name.
+  const labels = (entry.startedRuns ?? []).flatMap((r) => (r.label ? [r.label] : []));
   return html`<div class="row">
     <div class="title">${ICON[entry.status]} ${titleOf(entry)}</div>
+    ${labels.map((label) => html`<div class="detail">"${label}"</div>`)}
     ${
       outputs.length > 0
         ? html`<div class="outputs">→ ${outputs.map((ref) => link(ref, ctx))}</div>`

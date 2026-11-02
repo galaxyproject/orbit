@@ -624,6 +624,74 @@ describe("startedWork: the Galaxy work a result names", () => {
   });
 });
 
+describe("advance: a workflow run's title", () => {
+  const invoked: NarrationEvent[] = [
+    { kind: "group-start", groupId: "m1", at: 0 },
+    { id: "w", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1, args: {} },
+    {
+      id: "w",
+      toolName: "invoke_workflow",
+      phase: "end",
+      groupId: "m1",
+      at: 2,
+      result: { success: true, data: { id: "i1", state: "new" } },
+    },
+    { kind: "group-end", groupId: "m1", at: 2 },
+  ];
+
+  it("reads as running once Galaxy has it, and keeps the harness's label beside it", () => {
+    const running = play(invoked);
+    expect(running.groups[0].entries[0].title).toBe("Running a workflow");
+    expect(currentStatus(running)?.text).toBe("Galaxy is still working: Running a workflow");
+
+    const labeled = advance(running, {
+      kind: "run-labeled",
+      at: 3,
+      id: "i1",
+      label: "Trim and count",
+    });
+    expect(labeled.groups[0].entries[0]).toMatchObject({
+      title: "Running a workflow",
+      startedRuns: [{ id: "i1", label: "Trim and count" }],
+    });
+    expect(currentStatus(labeled)?.text).toBe(
+      'Galaxy is still working: Running a workflow · "Trim and count"',
+    );
+  });
+
+  it("names the workflow when an earlier read gave its name", () => {
+    const state = play([
+      { kind: "group-start", groupId: "m1", at: 0 },
+      { id: "d", toolName: "get_workflow_details", phase: "start", groupId: "m1", at: 1, args: {} },
+      {
+        id: "d",
+        toolName: "get_workflow_details",
+        phase: "end",
+        groupId: "m1",
+        at: 1,
+        result: { success: true, data: { id: "wf1", name: "Duplicate dataset" } },
+      },
+      ...invoked
+        .slice(1)
+        .map((e) =>
+          "phase" in e && e.phase === "start" ? { ...e, args: { workflow_id: "wf1" } } : e,
+        ),
+    ]);
+    const run = state.groups[0].entries.find((e) => e.toolName === "invoke_workflow");
+    expect(run).toMatchObject({
+      title: 'Running "Duplicate dataset"',
+      doneTitle: 'Ran "Duplicate dataset"',
+    });
+  });
+
+  it("ignores a label for a run it doesn't know", () => {
+    const running = play(invoked);
+    expect(advance(running, { kind: "run-labeled", at: 3, id: "i9", label: "Other" })).toBe(
+      running,
+    );
+  });
+});
+
 describe("advance: rows follow their Galaxy jobs", () => {
   const submitted = (id: string, jobs: { id: string; state?: string }[], at = 2): ToolEvent => ({
     id,

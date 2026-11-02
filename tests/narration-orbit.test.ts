@@ -5,6 +5,7 @@ import {
   followUpRuns,
   invocationProgress,
   planTitle,
+  recordedRun,
   type OrbitNarrationHost,
 } from "../app/src/renderer/whats-happening-orbit.js";
 import {
@@ -93,6 +94,35 @@ describe("What's Happening's Orbit wiring", () => {
       "run-2",
       "run-3",
     ]);
+  });
+
+  it("labels a run with the step Orbit records it under, not as its name", () => {
+    const n = narration();
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent({ type: "tool_execution_start", toolCallId: "w", toolName: "invoke_workflow" });
+    n.onAgentEvent({
+      type: "tool_execution_end",
+      toolCallId: "w",
+      toolName: "invoke_workflow",
+      result: { structuredContent: { success: true, data: { id: "i1", state: "new" } } },
+    });
+    n.onAgentEvent({
+      type: "tool_execution_start",
+      toolCallId: "r",
+      toolName: "galaxy_invocation_record",
+      args: {
+        invocationId: "i1",
+        notebookAnchor: "plan-a-step-21",
+        label: "Run duplicate workflow",
+      },
+    });
+    expect(n.state.groups[0].entries[0]).toMatchObject({
+      title: "Running a workflow",
+      startedRuns: [{ id: "i1", label: "Run duplicate workflow" }],
+    });
+    expect(recordedRun({ toolName: "galaxy_job_record", args: { jobId: "j1", label: " " } })).toBe(
+      undefined,
+    );
   });
 
   it("lets a chat message answer a plan draft or a paused follow-up, but not a slash command", () => {

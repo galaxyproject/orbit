@@ -86,6 +86,8 @@ export interface NarrationEntry {
   status: "running" | "done" | "failed" | "untracked";
   /** Plain-language summary, e.g. "Running FastQC on reads.fastq". */
   title: string;
+  /** How the call is told once it has returned and Galaxy is doing the work, when that reads differently ("Running a workflow"). */
+  runningTitle?: string;
   /** How the call is told once it has finished, when that reads differently ("Looked at your history"). */
   doneTitle?: string;
   /** How the call is told if it failed ("RNA STAR failed on 3 datasets"), when that reads differently. */
@@ -167,6 +169,18 @@ export type LifecycleEvent =
       steps?: readonly InvocationStep[];
       /** For a workflow invocation, when the harness counts it: how far it has got. */
       progress?: RunProgress;
+    }
+  | {
+      /**
+       * The harness's own label for a Galaxy job or workflow invocation it
+       * knows by id, e.g. the step it recorded the run under. Shown beside the
+       * run as the harness's description, never as the workflow's or tool's
+       * name. Optional.
+       */
+      kind: "run-labeled";
+      at: number;
+      id: string;
+      label: string;
     }
   | {
       /**
@@ -276,6 +290,8 @@ export interface GalaxyRun {
   steps?: readonly InvocationStep[];
   /** For a workflow invocation: how far it has got, when the harness counts that instead of listing steps. */
   progress?: RunProgress;
+  /** The harness's own label for the run (see `run-labeled`), e.g. "Run duplicate workflow (simple data)". */
+  label?: string;
 }
 
 /** Which Galaxy job or workflow invocation, without its state. */
@@ -331,6 +347,7 @@ export interface NameMemory {
   datasets: Readonly<Record<string, NamedItem>>;
   collections: Readonly<Record<string, NamedItem>>;
   histories: Readonly<Record<string, string>>;
+  workflows: Readonly<Record<string, string>>;
 }
 
 export interface NarrationState {

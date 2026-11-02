@@ -156,6 +156,8 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
 
     const groupId = pi.groupId;
     const message = event.message as { role?: string } | undefined;
+    const recorded = type === "tool_execution_start" ? recordedRun(event) : undefined;
+    if (recorded) apply({ kind: "run-labeled", at, ...recorded });
     if (type === "tool_execution_end" && String(event.toolName).endsWith("loom_propose")) {
       // Orbit's approval gate: a proposal leaves the user to type /approve. Its
       // "Not proposed -- fix these" reply isn't flagged as an error, so only a
@@ -291,6 +293,26 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
       listeners.clear();
     },
   };
+}
+
+/**
+ * The run Orbit is recording in its notebook, and the label it gives it:
+ * `galaxy_invocation_record({ invocationId, label })` for a workflow run,
+ * `galaxy_job_record({ jobId, label })` for a tool run.
+ */
+export function recordedRun(
+  event: Record<string, unknown>,
+): { id: string; label: string } | undefined {
+  const tool = String(event.toolName);
+  const args = event.args as
+    { invocationId?: unknown; jobId?: unknown; label?: unknown } | undefined;
+  const id = tool.endsWith("galaxy_invocation_record")
+    ? args?.invocationId
+    : tool.endsWith("galaxy_job_record")
+      ? args?.jobId
+      : undefined;
+  const label = typeof args?.label === "string" ? args.label.trim() : "";
+  return typeof id === "string" && id && label ? { id, label } : undefined;
 }
 
 /** The runs Orbit's follow-up is about, from the JSON list in its text ({kind, id, …} per run). */

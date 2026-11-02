@@ -14,6 +14,7 @@ import {
   classifyTool,
   describeDoneCall,
   describeFailedCall,
+  describeRunningCall,
   describeToolCall,
   inputRefs,
   operationFor,
@@ -225,6 +226,8 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
       const drop = match ?? loose[0];
       return { ...state, galaxyRunning: state.galaxyRunning.filter((w) => w !== drop) };
     }
+    case "run-labeled":
+      return labelRun(state, event.id, event.label);
     case "job-state":
       return applyJobState(state, event.id, event.state, event.at, {
         steps: event.steps,
@@ -283,13 +286,15 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
           ],
         };
       } else {
+        const pending = runs.filter((r) => !runFinished(r));
+        // Galaxy has the work now: "Starting a workflow run" becomes "Running a workflow".
+        const title = (pending.length > 0 && entry.runningTitle) || entry.title;
         next = updateAt(next, index, (g) => ({
           ...g,
           entries: g.entries.map((e) =>
-            e.id === event.id ? settle({ ...e, startedRuns: runs }, event.at) : e,
+            e.id === event.id ? settle({ ...e, title, startedRuns: runs }, event.at) : e,
           ),
         }));
-        const pending = runs.filter((r) => !runFinished(r));
         next = {
           ...next,
           galaxyRunning: [
@@ -297,7 +302,7 @@ function advanceTool(state: NarrationState, event: ToolEvent): NarrationState {
             ...pending.map((r) => ({
               id: event.id,
               galaxyId: r.id,
-              title: entry.title,
+              title,
               since: event.at,
             })),
           ],
@@ -448,6 +453,30 @@ function runsFailedLine(runs: readonly GalaxyRun[]): string {
   return parts.join("; ");
 }
 
+/** Puts the harness's label on the Galaxy run it names, for views to show beside the run. */
+function labelRun(state: NarrationState, id: string, label: string): NarrationState {
+  const hasRun = (e: NarrationEntry): boolean => e.startedRuns?.some((r) => r.id === id) ?? false;
+  if (!state.groups.some((g) => g.entries.some(hasRun))) return state;
+  return {
+    ...state,
+    groups: state.groups.map((g) =>
+      g.entries.some(hasRun)
+        ? {
+            ...g,
+            entries: g.entries.map((e) =>
+              e.startedRuns && hasRun(e)
+                ? {
+                    ...e,
+                    startedRuns: e.startedRuns.map((r) => (r.id === id ? { ...r, label } : r)),
+                  }
+                : e,
+            ),
+          }
+        : g,
+    ),
+  };
+}
+
 function applyJobState(
   state: NarrationState,
   id: string,
@@ -523,9 +552,12 @@ export function currentActivity(state: NarrationState): ActivityLine[] {
     .sort((a, b) => a.since - b.since);
   const galaxy: ActivityLine[] = state.galaxyRunning.map((w) => {
     const group = state.groups.find((g) => g.entries.some((e) => e.id === w.id));
+    const label = group?.entries
+      .find((e) => e.id === w.id)
+      ?.startedRuns?.find((r) => r.id === w.galaxyId)?.label;
     return {
       kind: "galaxy",
-      text: w.title,
+      text: label ? `${w.title} · "${label}"` : w.title,
       since: w.since,
       ...(group ? { groupId: group.id } : {}),
       ...(w.galaxyId ? { galaxyId: w.galaxyId } : {}),
@@ -730,10 +762,15 @@ function outcomeTitlesFor(
   toolName: string,
   args: unknown,
   names: NameMemory,
-): Pick<NarrationEntry, "doneTitle" | "failedTitle"> {
+): Pick<NarrationEntry, "runningTitle" | "doneTitle" | "failedTitle"> {
+  const runningTitle = describeRunningCall(toolName, args, names);
   const doneTitle = describeDoneCall(toolName, args, names);
   const failedTitle = describeFailedCall(toolName, args, names);
-  return { ...(doneTitle ? { doneTitle } : {}), ...(failedTitle ? { failedTitle } : {}) };
+  return {
+    ...(runningTitle ? { runningTitle } : {}),
+    ...(doneTitle ? { doneTitle } : {}),
+    ...(failedTitle ? { failedTitle } : {}),
+  };
 }
 
 /**

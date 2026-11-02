@@ -11,7 +11,7 @@
 
 import { css, html, nothing, type TemplateResult } from "lit";
 
-import { groupsForUserMessage } from "../core/narrator.js";
+import { groupsForUserMessage, runEnded } from "../core/narrator.js";
 import { rowsOf } from "../core/rows.js";
 import type { NarrationGroup } from "../core/types.js";
 import { cardBody, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
@@ -93,7 +93,25 @@ function inlineLine(
   const waiting = all.flatMap((g) => g.waitingFor ?? [])[0];
   if (waiting)
     return `⏸ To continue, ${waiting.text} · waiting ${elapsed(ctx.now - waiting.since)}`;
-  if (all.some((g) => !isFinished(g))) return `⏳ Galaxy is still working · ${took} so far`;
+  if (all.some((g) => !isFinished(g))) {
+    // What Galaxy is working on, the harness's label for it, and how far it has got when counted.
+    const running = all
+      .flatMap((g) => g.entries)
+      .find((e) => e.status === "running" && e.startedRuns);
+    if (!running) return `⏳ Galaxy is still working · ${took} so far`;
+    const progress = running.startedRuns?.find(
+      (r) => r.progress && r.progress.totalJobs > 0,
+    )?.progress;
+    // A workflow run's counts, or a tool run's own jobs when it has several.
+    const toolJobs = running.startedRuns?.filter((r) => r.kind === "job") ?? [];
+    const jobs = progress
+      ? ` · ${progress.completedJobs} of ${progress.totalJobs} jobs`
+      : toolJobs.length > 1
+        ? ` · ${toolJobs.filter(runEnded).length} of ${toolJobs.length} jobs`
+        : "";
+    const label = running.startedRuns?.find((r) => r.label)?.label;
+    return `⏳ ${running.title}${label ? ` · "${label}"` : ""}${jobs} · ${took} so far`;
+  }
   if (main.status === "stopped") {
     return `❌ Stopped after ${took}${main.error ? `: ${shorten(main.error, 120)}` : ""}`;
   }
