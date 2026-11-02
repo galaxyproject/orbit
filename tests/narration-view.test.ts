@@ -111,22 +111,6 @@ describe("<whats-happening>", () => {
       "Orbit followed up",
     );
   });
-
-  it("draws only one message's work when given a user message, and nothing when it has none", async () => {
-    const state = play([
-      ...asked("m1", "First", 0, "u1"),
-      { kind: "group-end", groupId: "m1", at: 1_000 },
-      ...asked("m2", "Second", 2_000, "u2"),
-    ]);
-    const first = await mount({ state, now: 3_000, userMessageId: "u1" });
-    expect(lines(first)).toEqual([
-      'You asked: "First"',
-      "✅ Done in 1s",
-      "Answered without running anything in Galaxy",
-    ]);
-    const none = await mount({ state, now: 3_000, userMessageId: "u9" });
-    expect(lines(none)).toEqual([]);
-  });
 });
 
 describe("<whats-happening> cards", () => {

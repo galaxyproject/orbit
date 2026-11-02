@@ -1,31 +1,21 @@
 /**
  * `<whats-happening>`: the list view. The live status pinned on top, then one
- * card per message, newest first; for a side panel or a dashboard widget. With
- * `user-message-id` it draws only that message's work.
+ * card per message, newest first; for a side panel or a dashboard widget.
  *
  * Built on Lit, so any page can use it, whatever framework it runs (Orbit's
  * plain DOM and React, Galaxy's Vue). It imports nothing from a harness: the
- * host hands it the state and, optionally, Galaxy links, the assistant's name
- * and a message. It is styled with `--wh-*` CSS custom properties.
+ * host hands it the state and, optionally, Galaxy links and the assistant's
+ * name. It is styled with `--wh-*` CSS custom properties.
  */
 
-import { css, html, nothing } from "lit";
+import { css, html } from "lit";
 
-import { groupsForUserMessage } from "../core/narrator.js";
 import { cardStyles, cards } from "./card.js";
 import { NarrationView, partStyles, statusLines } from "./parts.js";
 
 export type { GalaxyLinkBuilder } from "./parts.js";
 
 export class WhatsHappeningElement extends NarrationView {
-  static override properties = {
-    ...NarrationView.properties,
-    userMessageId: { type: String, attribute: "user-message-id" },
-  };
-
-  /** Draw only the work for this user message (e.g. under its chat bubble). */
-  declare userMessageId?: string;
-
   static override styles = [
     partStyles,
     cardStyles,
@@ -40,22 +30,15 @@ export class WhatsHappeningElement extends NarrationView {
 
   override render() {
     const ctx = this.context;
-    const groups = this.userMessageId
-      ? groupsForUserMessage(ctx.state, this.userMessageId)
-      : ctx.state.groups;
-    // Newest first; follow-ups inside the card they belong to.
-    const drawn = cards(groups, ctx);
-    if (this.userMessageId) {
-      // Just that message's work, and nothing when there is none.
-      return groups.length === 0 ? nothing : drawn;
-    }
+    const groups = ctx.state.groups;
     if (groups.length === 0) {
       const who = this.assistantName ?? "your assistant";
       return html`<div class="empty">
         When ${who} starts working, each step will show up here.
       </div>`;
     }
-    return html`${statusLines(ctx)}${drawn}`;
+    // Newest first; follow-ups inside the card they belong to.
+    return html`${statusLines(ctx)}${cards(groups, ctx)}`;
   }
 }
 

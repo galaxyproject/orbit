@@ -55,11 +55,13 @@ whats-happening/
    from the harness's own poller, so rows stay "running" until Galaxy says
    they are done.
 
-To draw it, register the element with `defineWhatsHappening()` and set its
-`state` after each change. Optionally give it `buildUrl` (links into Galaxy),
-`assistant-name` (e.g. "Orbit"), and `user-message-id` to draw only one
-message's work, e.g. under its chat bubble. Restyle it with `--wh-*` CSS
-custom properties.
+To draw it, register the element you use, `defineWhatsHappening()` for the list
+or `defineWhatsHappeningInline()` for the one-line view (or both), and set its
+`state` after each change.
+`<whats-happening>` shows every message's work; `<whats-happening-inline
+user-message-id="…">` shows one message's work on one line, e.g. under its chat
+bubble. Optionally give them `buildUrl` (links into Galaxy) and `assistant-name`
+(e.g. "Orbit"). Restyle them with `--wh-*` CSS custom properties.
 
 Tests: `tests/narration-core.test.ts`, `tests/narration-pi-adapter.test.ts`,
 `tests/narration-view.test.ts`.
