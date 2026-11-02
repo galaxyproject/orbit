@@ -1251,7 +1251,17 @@ body.platform-darwin #files-title {
   user-select: none;
 }
 
-/* What's Happening's line under a user message: what Orbit did for it. */
+/* What's Happening's dock above the input: the latest message's line. */
+#whats-happening-dock {
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 0 16px;
+}
+#whats-happening-dock .wh-inline {
+  margin: 6px 0;
+}
+
+/* What's Happening's line for a user message: what Orbit did for it. */
 .wh-inline {
   display: block;
   margin: 6px 0 0 36px;

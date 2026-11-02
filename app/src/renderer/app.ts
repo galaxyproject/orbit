@@ -151,7 +151,9 @@ const whatsHappening = createOrbitNarration({
       contextWindow: knownContextWindowFor(currentProvider, currentModel),
     }).text,
 });
-chat.setUserMessageHook(chatInlineHook(whatsHappening));
+chat.setUserMessageHook(
+  chatInlineHook(whatsHappening, document.getElementById("whats-happening-dock")!),
+);
 mountWhatsHappeningList(artifacts.getWhatsHappeningContainer(), whatsHappening);
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would

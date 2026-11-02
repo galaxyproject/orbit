@@ -12,15 +12,17 @@ function chat() {
     describeModelError: (message) => message,
     syncEveryMs: 0,
   });
-  const hook = chatInlineHook(narration);
   const container = document.createElement("div");
-  document.body.append(container);
+  const dock = document.createElement("div");
+  document.body.append(container, dock);
+  const hook = chatInlineHook(narration, dock);
   const message = (text: string, replayed = false, id?: string): WhatsHappeningInlineElement => {
     const el = document.createElement("div");
     el.className = "user-turn";
     container.append(el);
     hook(el, { text, replayed, ...(id ? { id } : {}) });
-    return el.nextElementSibling as WhatsHappeningInlineElement;
+    const line = text.startsWith("/") ? el.nextElementSibling : dock.lastElementChild;
+    return line as WhatsHappeningInlineElement;
   };
   // pi seeing a message: a run starting with it, its timestamp as its id.
   const piSees = (text: string, timestamp: number) => {
@@ -30,7 +32,7 @@ function chat() {
       message: { role: "user", content: [{ type: "text", text }], timestamp },
     });
   };
-  return { narration, container, message, piSees };
+  return { narration, container, dock, message, piSees };
 }
 
 describe("What's Happening under Orbit's chat messages", () => {
@@ -73,11 +75,30 @@ describe("What's Happening under Orbit's chat messages", () => {
     expect(fresh.userMessageId).toBe("5");
   });
 
-  it("forgets lines a cleared chat took away", () => {
-    const { message, piSees, container } = chat();
+  it("docks the latest message's line, and moves it into the chat when the next message is sent", () => {
+    const { message, container, dock } = chat();
+    const first = message("Run my workflow");
+    expect(first.parentElement).toBe(dock);
+
+    // A slash command leaves the docked line where it is, its own line under its bubble.
+    const approve = message("/approve prop-ab12");
+    expect(first.parentElement).toBe(dock);
+    expect(approve.parentElement).toBe(container);
+
+    // The next message takes the dock; the line before it joins the chat, before its bubble.
+    const second = message("How many histories?");
+    expect(second.parentElement).toBe(dock);
+    const secondRow = container.lastElementChild;
+    expect(secondRow?.previousElementSibling).toBe(first);
+  });
+
+  it("forgets lines a cleared chat took away, docked ones too", () => {
+    const { message, piSees, container, dock } = chat();
     message("Trim the reads");
     container.replaceChildren();
     const after = message("Trim the reads");
+    expect(dock.children).toHaveLength(1);
+    expect(container.querySelector("whats-happening-inline")).toBeNull();
     piSees("Trim the reads", 9);
     expect(after.userMessageId).toBe("9");
   });

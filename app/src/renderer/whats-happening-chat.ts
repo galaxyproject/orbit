@@ -1,6 +1,6 @@
 /**
- * What's Happening under Orbit's chat messages: a `<whats-happening-inline>`
- * line under each user bubble, showing what Orbit did for that message.
+ * What's Happening in Orbit's chat: a `<whats-happening-inline>` line per user
+ * message, showing what Orbit did for it.
  *
  * A live bubble is drawn before pi has seen its message, and pi's message id
  * (its timestamp) arrives later through the narration. So its line starts
@@ -23,6 +23,10 @@ interface Line {
   text: string;
 }
 
+/** Each line's bubble row, so a cleared chat takes its lines out of the dock too. */
+const rows = new WeakMap<WhatsHappeningInlineElement, HTMLElement>();
+const inChat = (el: WhatsHappeningInlineElement): boolean => rows.get(el)?.isConnected ?? false;
+
 /**
  * Returns the hook for `ChatPanel.setUserMessageHook`. A replayed bubble without
  * an id stays unmatched, so a new message's work never lands under an old
@@ -30,6 +34,7 @@ interface Line {
  */
 export function chatInlineHook(
   narration: OrbitNarration,
+  dock: HTMLElement,
 ): (row: HTMLElement, message: UserMessageDrawn) => void {
   const tag = defineWhatsHappeningInline();
   // Lines still waiting for their message, oldest first.
@@ -37,10 +42,17 @@ export function chatInlineHook(
   let matched: WhatsHappeningInlineElement[] = [];
   const taken = new Set<string>();
 
+  /** A cleared chat (/new, /clear) takes its lines with it, docked ones too. */
+  function prune(): void {
+    for (const el of dock.querySelectorAll<WhatsHappeningInlineElement>(tag)) {
+      if (!inChat(el)) el.remove();
+    }
+    waiting = waiting.filter((line) => inChat(line.el));
+    matched = matched.filter((el) => inChat(el));
+  }
+
   function update(state: NarrationState): void {
-    // A cleared chat (/new, /clear) takes its lines with it.
-    waiting = waiting.filter((line) => line.el.isConnected);
-    matched = matched.filter((el) => el.isConnected);
+    prune();
     for (const group of state.groups) {
       for (const message of group.messages) {
         if (message.by !== "user" || !message.id || taken.has(message.id)) continue;
@@ -59,11 +71,19 @@ export function chatInlineHook(
   narration.subscribe(update);
 
   return (row, { text, replayed, id }) => {
+    prune();
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
     el.hideUntilAction = true;
     el.assistantName = "Orbit";
     el.className = "wh-inline";
-    row.after(el);
+    rows.set(el, row);
+    if (text.trim().startsWith("/")) {
+      row.after(el);
+    } else {
+      // The docked line(s) join the chat, before this bubble; this one docks.
+      row.before(...dock.querySelectorAll(tag));
+      dock.append(el);
+    }
     if (id) {
       taken.add(id);
       el.userMessageId = id;
