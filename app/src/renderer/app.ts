@@ -67,9 +67,11 @@ import type { ProviderAuthCaps } from "../../../shared/provider-auth-caps.js";
 import { splitApprovalPrompt } from "../../../shared/approval-prompt.js";
 import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.js";
 import { createModalClaim } from "./ext-modal-claim.js";
+import { galaxyArtifactUrl } from "../../../shared/galaxy-artifact-links.js";
 import { createOrbitNarration } from "./whats-happening-orbit.js";
 import { chatInlineHook } from "./whats-happening-chat.js";
 import { mountWhatsHappeningList } from "./whats-happening-activity.js";
+import type { GalaxyLinkBuilder } from "./whats-happening/views/parts.js";
 
 declare global {
   interface Window {
@@ -151,10 +153,19 @@ const whatsHappening = createOrbitNarration({
       contextWindow: knownContextWindowFor(currentProvider, currentModel),
     }).text,
 });
+// Links into Galaxy, on the server the chat links to (set in refreshGalaxyStatus).
+// The browser shell has no Galaxy status, so there it draws names without links.
+let whatsHappeningServer: string | null = null;
+const whatsHappeningLink: GalaxyLinkBuilder = (ref) =>
+  galaxyArtifactUrl(whatsHappeningServer, ref.kind, ref.id) ?? undefined;
 chat.setUserMessageHook(
-  chatInlineHook(whatsHappening, document.getElementById("whats-happening-dock")!),
+  chatInlineHook(
+    whatsHappening,
+    document.getElementById("whats-happening-dock")!,
+    whatsHappeningLink,
+  ),
 );
-mountWhatsHappeningList(artifacts.getWhatsHappeningContainer(), whatsHappening);
+mountWhatsHappeningList(artifacts.getWhatsHappeningContainer(), whatsHappening, whatsHappeningLink);
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.
@@ -783,6 +794,7 @@ async function refreshGalaxyStatus(): Promise<void> {
   // A newer refresh started while we awaited -- let it win.
   if (seq !== galaxyStatusSeq) return;
   chat.setGalaxyServerUrl(connected ? url : null);
+  whatsHappeningServer = connected ? url : null;
 
   if (connected && url) {
     galaxyStatus.classList.add("status-dot-connected");

@@ -15,7 +15,9 @@ function chat() {
   const container = document.createElement("div");
   const dock = document.createElement("div");
   document.body.append(container, dock);
-  const hook = chatInlineHook(narration, dock);
+  const buildUrl = (ref: { kind: string; id: string }) =>
+    `https://galaxy.test/${ref.kind}/${ref.id}`;
+  const hook = chatInlineHook(narration, dock, buildUrl);
   const message = (text: string, replayed = false, id?: string): WhatsHappeningInlineElement => {
     const el = document.createElement("div");
     el.className = "user-turn";
@@ -43,6 +45,9 @@ describe("What's Happening under Orbit's chat messages", () => {
     const line = message("Trim the reads");
     expect(line.tagName.toLowerCase()).toBe("whats-happening-inline");
     expect(line.hideIfNothingHappened).toBe(true);
+    expect(line.buildUrl?.({ kind: "dataset", id: "d1", label: "d1" })).toBe(
+      "https://galaxy.test/dataset/d1",
+    );
     expect(line.userMessageId).toBeUndefined();
 
     piSees("Trim the reads", 111);

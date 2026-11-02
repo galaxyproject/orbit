@@ -15,6 +15,7 @@ import {
 } from "./whats-happening/views/whats-happening-inline.js";
 import type { NarrationState } from "./whats-happening/core/types.js";
 import type { UserMessageDrawn } from "./chat/chat-panel.js";
+import type { GalaxyLinkBuilder } from "./whats-happening/views/parts.js";
 import type { OrbitNarration } from "./whats-happening-orbit.js";
 
 /** One user bubble's line, and the text it is matched by. */
@@ -41,6 +42,7 @@ const inChat = (el: WhatsHappeningInlineElement): boolean => rows.get(el)?.isCon
 export function chatInlineHook(
   narration: OrbitNarration,
   dock: HTMLElement,
+  buildUrl?: GalaxyLinkBuilder,
 ): (row: HTMLElement, message: UserMessageDrawn) => void {
   const tag = defineWhatsHappeningInline();
   // Lines still waiting for their message, oldest first.
@@ -96,6 +98,7 @@ export function chatInlineHook(
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
     el.hideIfNothingHappened = true;
     el.assistantName = "Orbit";
+    el.buildUrl = buildUrl;
     el.className = "wh-inline";
     rows.set(el, row);
     const approved = /^\/approve\s+(prop-[\w-]+)/.exec(text.trim())?.[1];
