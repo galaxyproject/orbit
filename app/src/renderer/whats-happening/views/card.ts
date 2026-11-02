@@ -86,7 +86,7 @@ export function card(
 }
 
 /** Done or stopped, with no Galaxy work of its own still running. */
-function isFinished(group: NarrationGroup): boolean {
+export function isFinished(group: NarrationGroup): boolean {
   return (
     (group.status === "done" || group.status === "stopped") &&
     !group.entries.some((e) => e.status === "running")
@@ -94,7 +94,7 @@ function isFinished(group: NarrationGroup): boolean {
 }
 
 /** "3 changes to your Galaxy · 1 failed", or what the card did when it changed nothing. */
-function summaryLine(
+export function summaryLine(
   group: NarrationGroup,
   followUps: readonly NarrationGroup[],
   ctx: DrawContext,
@@ -412,9 +412,26 @@ export const cardStyles = css`
     margin: 1px 0 0 14px;
     font-size: 0.92em;
   }
+  /* Every fold says it opens: its own chevron, the pointer, and a hover underline. */
   details > summary {
+    list-style: none;
     cursor: pointer;
     color: var(--wh-muted, GrayText);
+  }
+  details > summary::-webkit-details-marker {
+    display: none;
+  }
+  details > summary::before {
+    content: "▸";
+    display: inline-block;
+    width: 1.1em;
+    color: var(--wh-text, inherit);
+  }
+  details[open] > summary::before {
+    content: "▾";
+  }
+  details > summary:hover {
+    text-decoration: underline;
   }
   details.summary {
     margin: 4px 0 0 12px;

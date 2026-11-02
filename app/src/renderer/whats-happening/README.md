@@ -19,7 +19,8 @@ whats-happening/
 ├── views/
 │   ├── card.ts             shared by the views: the message card, its rows, steps and follow-ups
 │   ├── parts.ts            shared by the views: the base element, status lines, styles
-│   └── whats-happening.ts  <whats-happening>: the live status and every message's card
+│   ├── whats-happening.ts  <whats-happening>: the live status and every message's card
+│   └── whats-happening-inline.ts  <whats-happening-inline>: one message's work on one line, opening to its card
 └── core/
     ├── types.ts     events in (tool calls, lifecycle), the state out
     ├── narrator.ts  advance(): folds events into the state; currentStatus()

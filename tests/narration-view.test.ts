@@ -10,6 +10,10 @@ import {
   defineWhatsHappening,
   type WhatsHappeningElement,
 } from "../app/src/renderer/whats-happening/views/whats-happening.js";
+import {
+  defineWhatsHappeningInline,
+  type WhatsHappeningInlineElement,
+} from "../app/src/renderer/whats-happening/views/whats-happening-inline.js";
 
 const tag = defineWhatsHappening();
 
@@ -303,5 +307,153 @@ describe("<whats-happening> cards", () => {
     const el = await mount({ state, now: 13_000, assistantName: "Orbit" });
     expect(el.shadowRoot!.querySelectorAll("section.card")).toHaveLength(1);
     expect(lines(el)).toContain("1 change to your Galaxy · Orbit followed up (1)");
+  });
+});
+
+describe("<whats-happening-inline>", () => {
+  const inlineTag = defineWhatsHappeningInline();
+  async function inline(
+    props: Partial<WhatsHappeningInlineElement>,
+  ): Promise<WhatsHappeningInlineElement> {
+    const el = document.createElement(inlineTag) as WhatsHappeningInlineElement;
+    Object.assign(el, props);
+    document.body.append(el);
+    await el.updateComplete;
+    return el;
+  }
+  const line = (el: WhatsHappeningInlineElement) =>
+    el.shadowRoot!.querySelector("summary")?.textContent?.replace(/\s+/g, " ").trim();
+  const ranOne: NarrationEvent[] = [
+    {
+      id: "r1",
+      toolName: "run_tool",
+      phase: "start",
+      groupId: "m1",
+      at: 1_000,
+      args: { tool_id: "fastp" },
+    },
+    {
+      id: "r1",
+      toolName: "run_tool",
+      phase: "end",
+      groupId: "m1",
+      at: 2_000,
+      result: { data: { outputs: [{ id: "d8", hid: 8, name: "out" }], jobs: [] }, success: true },
+    },
+  ];
+
+  it("draws nothing for a message with no work, or without a message", async () => {
+    const state = play(asked("m1", "Hi", 0, "u1"));
+    expect(
+      (await inline({ state, now: 1_000, userMessageId: "u9" })).shadowRoot!.childElementCount,
+    ).toBe(0);
+    expect((await inline({ state, now: 1_000 })).shadowRoot!.childElementCount).toBe(0);
+  });
+
+  it("says in one line where the message's work stands, folded over its card", async () => {
+    const working = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "model", groupId: "m1", at: 500, activity: "thinking" },
+    ]);
+    const el = await inline({ state: working, now: 3_000, userMessageId: "u1" });
+    expect(line(el)).toBe("● Thinking… · 3s so far");
+    const details = el.shadowRoot!.querySelector("details.inline") as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("section.card")).not.toBeNull();
+
+    const waiting = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "awaiting-user", groupId: "m1", at: 1_000, text: "approve fastp", id: "p1" },
+      { kind: "group-end", groupId: "m1", at: 2_000 },
+    ]);
+    expect(line(await inline({ state: waiting, now: 3_000, userMessageId: "u1" }))).toBe(
+      "⏸ To continue, approve fastp · waiting 2s",
+    );
+
+    const done = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      ...ranOne,
+      { kind: "group-end", groupId: "m1", at: 3_000 },
+    ]);
+    expect(line(await inline({ state: done, now: 4_000, userMessageId: "u1" }))).toBe(
+      "✅ Done in 3s · 1 change to your Galaxy",
+    );
+
+    const stopped = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "group-end", groupId: "m1", at: 1_000, error: "model gone" },
+    ]);
+    expect(line(await inline({ state: stopped, now: 2_000, userMessageId: "u1" }))).toBe(
+      "❌ Stopped after 1s: model gone",
+    );
+  });
+
+  it("follows a follow-up at work on the message's work, and counts it once done", async () => {
+    const base: NarrationEvent[] = [
+      ...asked("m1", "Trim", 0, "u1"),
+      {
+        id: "r1",
+        toolName: "run_tool",
+        phase: "start",
+        groupId: "m1",
+        at: 1_000,
+        args: { tool_id: "fastp" },
+      },
+      {
+        id: "r1",
+        toolName: "run_tool",
+        phase: "end",
+        groupId: "m1",
+        at: 2_000,
+        result: { data: { outputs: [], jobs: [{ id: "j1", state: "ok" }] }, success: true },
+      },
+      { kind: "group-end", groupId: "m1", at: 3_000 },
+      { kind: "group-start", groupId: "f1", at: 4_000 },
+      {
+        kind: "group-message",
+        groupId: "f1",
+        at: 4_000,
+        text: "[auto] j1 done",
+        followUp: true,
+        about: [{ kind: "job", id: "j1" }],
+      },
+      { kind: "model", groupId: "f1", at: 4_500, activity: "writing" },
+    ];
+    const el = await inline({
+      state: play(base),
+      now: 6_000,
+      userMessageId: "u1",
+      assistantName: "Orbit",
+    });
+    expect(line(el)).toBe("● Writing a reply… · 6s so far");
+    const after = await inline({
+      state: play([...base, { kind: "group-end", groupId: "f1", at: 7_000 }]),
+      now: 8_000,
+      userMessageId: "u1",
+      assistantName: "Orbit",
+    });
+    expect(line(after)).toBe("✅ Done in 7s · 1 change to your Galaxy · Orbit followed up (1)");
+  });
+
+  it("shows one card, and notes any other work for the message instead of stacking it", async () => {
+    const state = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "group-end", groupId: "m1", at: 1_000 },
+      { kind: "group-start", groupId: "m2", at: 2_000 },
+      {
+        kind: "group-message",
+        groupId: "m2",
+        at: 2_000,
+        text: "Trim",
+        followUp: false,
+        messageId: "u1",
+      },
+      { kind: "group-end", groupId: "m2", at: 3_000 },
+    ]);
+    const el = await inline({ state, now: 4_000, userMessageId: "u1" });
+    expect(el.shadowRoot!.querySelectorAll("section.card")).toHaveLength(1);
+    expect(line(el)).toBe(
+      "✅ Done in 1s · Answered without running anything in Galaxy+1 more in Activity",
+    );
   });
 });
