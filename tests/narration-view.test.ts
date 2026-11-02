@@ -571,6 +571,39 @@ describe("<whats-happening-inline>", () => {
     expect(line(el)).toBe('⏳ Running a workflow · "Trim and count" · 3 of 5 jobs · 1m 00s so far');
   });
 
+  it("with show-elsewhere, says how much else is running and asks the host to show it", async () => {
+    // The user's message got a quick answer; another message's work is still going.
+    const state = play([
+      ...asked("m1", "Run my workflow", 0, "u1"),
+      { kind: "model", groupId: "m1", at: 500, activity: "thinking" },
+      ...asked("m2", "Hi", 1_000, "u2"),
+      { kind: "group-end", groupId: "m2", at: 1_500 },
+    ]);
+    const el = await inline({
+      state,
+      now: 2_000,
+      userMessageId: "u2",
+      hideIfNothingHappened: true,
+    });
+    expect(el.shadowRoot!.childElementCount).toBe(0);
+
+    el.showElsewhere = true;
+    await el.updateComplete;
+    const button = el.shadowRoot!.querySelector<HTMLButtonElement>("button.elsewhere")!;
+    expect(button.textContent?.replace(/\s+/g, " ").trim()).toBe("⏳ 1 more running ›");
+    // Its own line stays hidden (nothing happened), the button shows alone.
+    expect(el.shadowRoot!.querySelector("details")).toBeNull();
+    let shown = 0;
+    el.addEventListener("show-activity", () => shown++);
+    button.click();
+    expect(shown).toBe(1);
+
+    // The message's own work doesn't count as elsewhere.
+    el.userMessageId = "u1";
+    await el.updateComplete;
+    expect(el.shadowRoot!.querySelector("button.elsewhere")).toBeNull();
+  });
+
   it("counts a tool run's jobs when it has several, and not when it has one", async () => {
     const ran = (jobs: { id: string }[]): NarrationEvent[] => [
       ...asked("m1", "Trim the reads", 0, "u1"),

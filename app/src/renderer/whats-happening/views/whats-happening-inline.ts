@@ -7,13 +7,17 @@
  * It shows one card: the work the message started, with its follow-ups and
  * retries inside. In the rare case the message has more work besides, a quiet
  * note says so, so the chat isn't filled with cards.
+ *
+ * With `show-elsewhere`, it also says when something else is still going on
+ * (other messages' work, Galaxy jobs), as a button that fires `show-activity`
+ * so the host can show the full list.
  */
 
 import { css, html, nothing, type TemplateResult } from "lit";
 
-import { groupsForUserMessage, runEnded } from "../core/narrator.js";
+import { currentActivity, groupsForUserMessage, runEnded } from "../core/narrator.js";
 import { rowsOf } from "../core/rows.js";
-import type { NarrationGroup } from "../core/types.js";
+import type { NarrationGroup, NarrationState } from "../core/types.js";
 import { cardBody, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
 import {
   doneAt,
@@ -30,6 +34,7 @@ export class WhatsHappeningInlineElement extends NarrationView {
     ...NarrationView.properties,
     userMessageId: { type: String, attribute: "user-message-id" },
     hideIfNothingHappened: { type: Boolean, attribute: "hide-if-nothing-happened" },
+    showElsewhere: { type: Boolean, attribute: "show-elsewhere" },
   };
 
   /** The user message whose work to show. */
@@ -42,9 +47,17 @@ export class WhatsHappeningInlineElement extends NarrationView {
    */
   declare hideIfNothingHappened: boolean;
 
+  /**
+   * Also say when anything else is going on (other messages' work, Galaxy jobs
+   * they started), with a button that fires `show-activity`; e.g. for the line
+   * docked above a chat's input. Off by default.
+   */
+  declare showElsewhere: boolean;
+
   constructor() {
     super();
     this.hideIfNothingHappened = false;
+    this.showElsewhere = false;
   }
 
   static override styles = [
@@ -55,13 +68,53 @@ export class WhatsHappeningInlineElement extends NarrationView {
         margin-left: 8px;
         font-size: 0.92em;
       }
+      .with-elsewhere {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+      }
+      .with-elsewhere > details {
+        flex: 1;
+        min-width: 0;
+      }
+      .elsewhere {
+        flex: none;
+        margin-left: auto;
+        padding: 0 6px;
+        border: 1px solid var(--wh-border, rgba(127, 127, 127, 0.4));
+        border-radius: 5px;
+        background: none;
+        color: inherit;
+        font: inherit;
+        font-size: 0.92em;
+        cursor: pointer;
+      }
+      .elsewhere:hover {
+        border-color: currentColor;
+      }
     `,
   ];
 
   override render() {
-    if (!this.userMessageId) return nothing;
     const ctx = this.context;
-    const groups = groupsForUserMessage(ctx.state, this.userMessageId);
+    const groups = this.userMessageId ? groupsForUserMessage(ctx.state, this.userMessageId) : [];
+    const line = this.#line(ctx, groups);
+    const others = this.showElsewhere ? runningElsewhere(ctx.state, groups) : 0;
+    if (others === 0) return line;
+    const show = (event: Event) =>
+      event.currentTarget?.dispatchEvent(
+        new CustomEvent("show-activity", { bubbles: true, composed: true }),
+      );
+    return html`<div class="with-elsewhere">
+      ${line}
+      <button class="elsewhere" title="Show everything going on" @click=${show}>
+        ⏳ ${others} more running ›
+      </button>
+    </div>`;
+  }
+
+  /** The message's own line, folded over its card; nothing when it has none to show. */
+  #line(ctx: DrawContext, groups: readonly NarrationGroup[]): TemplateResult | typeof nothing {
     // The main card: the work this message itself started (follow-ups live inside it).
     const main =
       groups.find((g) => g.messages.some((m) => m.id === this.userMessageId)) ?? groups[0];
@@ -85,6 +138,12 @@ export class WhatsHappeningInlineElement extends NarrationView {
       <section class="card">${cardBody(main, ctx, followUps)}</section>
     </details>`;
   }
+}
+
+/** How many things are going on outside this message's own work: other groups at work, waits, Galaxy jobs. */
+function runningElsewhere(state: NarrationState, own: readonly NarrationGroup[]): number {
+  const ids = new Set(own.map((g) => g.id));
+  return currentActivity(state).filter((line) => !line.groupId || !ids.has(line.groupId)).length;
 }
 
 /** Where a message's work stands, in one line, with how long it has taken. */

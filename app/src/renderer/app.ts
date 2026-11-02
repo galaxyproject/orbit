@@ -162,6 +162,11 @@ const whatsHappeningChat = createChatLines(
   whatsHappening,
   document.getElementById("whats-happening-dock")!,
   whatsHappeningLink,
+  // "N more running" above the input opens the full list in Activity.
+  () => {
+    artifacts.selectTab("activity");
+    artifacts.selectActivityView("whats-happening");
+  },
 );
 chat.setUserMessageHook(whatsHappeningChat.hook);
 mountWhatsHappeningList(

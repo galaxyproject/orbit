@@ -53,6 +53,7 @@ export function createChatLines(
   narration: OrbitNarration,
   dock: HTMLElement,
   buildUrl?: GalaxyLinkBuilder,
+  showActivity?: () => void,
 ): ChatLines {
   const tag = defineWhatsHappeningInline();
   // Lines still waiting for their message, oldest first.
@@ -107,6 +108,13 @@ export function createChatLines(
 
   narration.subscribe(update);
 
+  /** The latest docked line also says when anything else is running, and opens Activity on click. */
+  const markDock = (): void => {
+    const docked = dock.querySelectorAll<WhatsHappeningInlineElement>(tag);
+    for (const el of docked) el.showElsewhere = el === docked[docked.length - 1];
+  };
+  if (showActivity) dock.addEventListener("show-activity", showActivity);
+
   const hook = (row: HTMLElement, { text, replayed, id }: UserMessageDrawn): void => {
     prune();
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
@@ -124,9 +132,13 @@ export function createChatLines(
       row.after(el);
     } else {
       // The docked line(s) join the chat, before this bubble; this one docks.
-      row.before(...dock.querySelectorAll(tag));
+      for (const old of dock.querySelectorAll<WhatsHappeningInlineElement>(tag)) {
+        old.showElsewhere = false;
+        row.before(old);
+      }
       dock.append(el);
     }
+    markDock();
     if (id) {
       taken.add(id);
       el.userMessageId = id;

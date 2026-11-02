@@ -17,7 +17,8 @@ function chat() {
   document.body.append(container, dock);
   const buildUrl = (ref: { kind: string; id: string }) =>
     `https://galaxy.test/${ref.kind}/${ref.id}`;
-  const lines = createChatLines(narration, dock, buildUrl);
+  let activityShown = 0;
+  const lines = createChatLines(narration, dock, buildUrl, () => activityShown++);
   const hook = lines.hook;
   const message = (text: string, replayed = false, id?: string): WhatsHappeningInlineElement => {
     const el = document.createElement("div");
@@ -38,7 +39,7 @@ function chat() {
       message: { role: "user", content: [{ type: "text", text }], timestamp },
     });
   };
-  return { narration, container, dock, message, piSees, lines };
+  return { narration, container, dock, message, piSees, lines, shownActivity: () => activityShown };
 }
 
 describe("What's Happening under Orbit's chat messages", () => {
@@ -146,6 +147,17 @@ describe("What's Happening under Orbit's chat messages", () => {
       },
     });
     expect(approve.userMessageId).toBeUndefined();
+  });
+
+  it("lets only the latest docked line say what else is running, and opens Activity on its click", () => {
+    const { message, dock, shownActivity } = chat();
+    const first = message("Run my workflow");
+    expect(first.showElsewhere).toBe(true);
+    const second = message("How many histories?");
+    expect([first.showElsewhere, second.showElsewhere]).toEqual([false, true]);
+    second.dispatchEvent(new CustomEvent("show-activity", { bubbles: true, composed: true }));
+    expect(shownActivity()).toBe(1);
+    expect(dock.lastElementChild).toBe(second);
   });
 
   it("gives each matched message its number in the chat, and shows its bubble when asked", () => {
