@@ -70,6 +70,24 @@ describe("pi adapter", () => {
     ]);
   });
 
+  it("drops a model error once a later reply in the run goes through", () => {
+    const { events } = run([
+      { type: "agent_start" },
+      {
+        type: "message_end",
+        message: { role: "assistant", stopReason: "error", errorMessage: "InternalServerError" },
+      },
+      { type: "agent_end", willRetry: true },
+      { type: "agent_start" },
+      { type: "message_end", message: { role: "assistant", stopReason: "stop" } },
+      { type: "agent_end" },
+    ]);
+    expect(events).toEqual([
+      { kind: "group-start", groupId: "run-1", at: 1000 },
+      { kind: "group-end", groupId: "run-1", at: 6000 },
+    ]);
+  });
+
   it("passes tool calls on with their group, reading the envelope from structured content or text", () => {
     const { events } = run([
       { type: "agent_start" },

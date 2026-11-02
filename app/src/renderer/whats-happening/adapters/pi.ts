@@ -156,6 +156,11 @@ export function fromPiEvent(
       const modelError = options.describeModelError?.(raw) || raw || "The model reported an error";
       return { state: { ...state, modelError }, events: [] };
     }
+    // A reply after the error went through: the run got past it.
+    if (state.modelError !== undefined) {
+      const { modelError: _recovered, ...rest } = state;
+      return { state: rest, events: [] };
+    }
   }
 
   return { state, events: [] };
