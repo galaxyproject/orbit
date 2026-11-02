@@ -335,7 +335,10 @@ export function followUpRuns(text: string): GalaxyRunRef[] {
 
 /** A plan draft's title: its first line, without heading marks or a trailing [tag]; undefined without a plan. */
 export function planTitle(reply: string): string | undefined {
-  const plan = /```plan\b[^\n]*\n([\s\S]*?)```/.exec(reply)?.[1];
+  // Like the chat's plan card: a closed block, or one left open to the end of the reply.
+  const plan =
+    /```plan\b[^\n]*\n([\s\S]*?)```/.exec(reply)?.[1] ??
+    /```plan\b[^\n]*\n([\s\S]*)$/.exec(reply)?.[1];
   if (plan === undefined) return undefined;
   return (
     plan

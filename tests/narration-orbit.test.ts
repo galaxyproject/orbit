@@ -284,5 +284,11 @@ describe("What's Happening's Orbit wiring", () => {
       },
     ]);
     expect(planTitle("no plan")).toBeUndefined();
+    // Left open to the end of the reply, as the chat still draws it as a plan card.
+    expect(
+      planTitle(
+        "Here it is:\n```plan\n# Plan A: tool by tool [hybrid]\n1. fastp\nReply /approve when ready.",
+      ),
+    ).toBe("Plan A: tool by tool");
   });
 });
