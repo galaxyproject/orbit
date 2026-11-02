@@ -8,7 +8,7 @@
 
 import { css, html, nothing, type TemplateResult } from "lit";
 
-import { anchorUserMessage } from "../core/narrator.js";
+import { anchorUserMessage, rootGroup } from "../core/narrator.js";
 import { rowsOf } from "../core/rows.js";
 import type {
   GalaxyRef,
@@ -32,14 +32,16 @@ const LINKED_KINDS: readonly GalaxyRef["kind"][] = [
 
 /**
  * The group whose card a follow-up shows in: the one holding the user message
- * the follow-up is anchored to. Undefined for every other group.
+ * the follow-up is anchored to, else the first turn of its chain. Undefined
+ * for every other group.
  */
 export function hostOf(state: NarrationState, group: NarrationGroup): NarrationGroup | undefined {
   if (!group.followUp) return undefined;
   const message = anchorUserMessage(state, group);
-  return message
-    ? state.groups.find((g) => g !== group && g.messages.includes(message))
-    : undefined;
+  if (message) return state.groups.find((g) => g !== group && g.messages.includes(message));
+  // No user message behind it (e.g. work approved from an earlier session): the chain's first turn.
+  const root = rootGroup(state, group);
+  return root !== group ? root : undefined;
 }
 
 /** Cards for these groups, newest first; follow-ups go inside the card they belong to. */

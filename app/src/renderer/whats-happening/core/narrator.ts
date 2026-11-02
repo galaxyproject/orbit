@@ -693,8 +693,26 @@ export function groupsForUserMessage(
   return state.groups.filter(
     (g) =>
       g.messages.some((m) => m.id === userMessageId) ||
-      anchorUserMessage(state, g)?.id === userMessageId,
+      anchorUserMessage(state, g)?.id === userMessageId ||
+      rootGroup(state, g).messages.some((m) => m.id === userMessageId),
   );
+}
+
+/**
+ * Where a chain of follow-ups started: back along `followUpOfIds` to the group
+ * that follows up on nothing. A group that follows up on nothing is its own root.
+ */
+export function rootGroup(
+  state: NarrationState,
+  group: NarrationGroup,
+  seen: ReadonlySet<string> = new Set(),
+): NarrationGroup {
+  const visited = new Set([...seen, group.id]);
+  for (const id of group.followUpOfIds ?? []) {
+    const origin = state.groups.find((g) => g.id === id);
+    if (origin && !visited.has(id)) return rootGroup(state, origin, visited);
+  }
+  return group;
 }
 
 function updateActive(

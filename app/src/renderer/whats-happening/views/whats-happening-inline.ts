@@ -29,22 +29,22 @@ export class WhatsHappeningInlineElement extends NarrationView {
   static override properties = {
     ...NarrationView.properties,
     userMessageId: { type: String, attribute: "user-message-id" },
-    hideUntilAction: { type: Boolean, attribute: "hide-until-action" },
+    hideIfNothingHappened: { type: Boolean, attribute: "hide-if-nothing-happened" },
   };
 
   /** The user message whose work to show. */
   declare userMessageId?: string;
 
   /**
-   * Draw nothing until the message's work touches Galaxy or asks the user
-   * something, for a host whose chat already shows the assistant thinking and
-   * replying. Off by default.
+   * Once the message's work is over, draw nothing if it never touched Galaxy or
+   * asked the user something, for a host whose chat already shows the
+   * assistant's reply. While the work is going, the line shows. Off by default.
    */
-  declare hideUntilAction: boolean;
+  declare hideIfNothingHappened: boolean;
 
   constructor() {
     super();
-    this.hideUntilAction = false;
+    this.hideIfNothingHappened = false;
   }
 
   static override styles = [
@@ -68,7 +68,8 @@ export class WhatsHappeningInlineElement extends NarrationView {
     if (!main) return nothing;
     const followUps = groups.filter((g) => hostOf(ctx.state, g) === main);
     const more = groups.filter((g) => g !== main && !followUps.includes(g)).length;
-    if (this.hideUntilAction && !tookAction(groups)) return nothing;
+    if (this.hideIfNothingHappened && groups.every(isFinished) && !tookAction(groups))
+      return nothing;
     const key = `inline:${main.id}`;
     const open = ctx.isOpen(key, false);
     const onToggle = (event: Event) => {

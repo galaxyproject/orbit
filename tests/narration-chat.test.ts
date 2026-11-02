@@ -21,7 +21,9 @@ function chat() {
     el.className = "user-turn";
     container.append(el);
     hook(el, { text, replayed, ...(id ? { id } : {}) });
-    const line = text.startsWith("/") ? el.nextElementSibling : dock.lastElementChild;
+    // Slash commands' lines go under their bubble; /approve's, like messages', to the dock.
+    const underBubble = text.startsWith("/") && !text.startsWith("/approve");
+    const line = underBubble ? el.nextElementSibling : dock.lastElementChild;
     return line as WhatsHappeningInlineElement;
   };
   // pi seeing a message: a run starting with it, its timestamp as its id.
@@ -40,7 +42,7 @@ describe("What's Happening under Orbit's chat messages", () => {
     const { message, piSees, narration } = chat();
     const line = message("Trim the reads");
     expect(line.tagName.toLowerCase()).toBe("whats-happening-inline");
-    expect(line.hideUntilAction).toBe(true);
+    expect(line.hideIfNothingHappened).toBe(true);
     expect(line.userMessageId).toBeUndefined();
 
     piSees("Trim the reads", 111);
@@ -81,15 +83,62 @@ describe("What's Happening under Orbit's chat messages", () => {
     expect(first.parentElement).toBe(dock);
 
     // A slash command leaves the docked line where it is, its own line under its bubble.
-    const approve = message("/approve prop-ab12");
+    const help = message("/help");
     expect(first.parentElement).toBe(dock);
-    expect(approve.parentElement).toBe(container);
+    expect(help.parentElement).toBe(container);
 
     // The next message takes the dock; the line before it joins the chat, before its bubble.
     const second = message("How many histories?");
     expect(second.parentElement).toBe(dock);
     const secondRow = container.lastElementChild;
     expect(secondRow?.previousElementSibling).toBe(first);
+  });
+
+  it("shows a run approved from an earlier session on its /approve line, stacked in the dock", () => {
+    const { message, dock, narration } = chat();
+    const asking = message("How many histories?");
+    const approve = message("/approve prop-old");
+    expect([...dock.children]).toEqual([asking, approve]);
+
+    narration.onAgentEvent({ type: "agent_start" });
+    narration.onAgentEvent({
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "[Orbit approval] The user approved prop-old. Submit it." },
+        ],
+        timestamp: 7,
+      },
+    });
+    expect(approve.userMessageId).toBe("7");
+  });
+
+  it("leaves the /approve line empty when the run shows with the message that asked for it", () => {
+    const { message, narration, piSees } = chat();
+    message("Propose the run");
+    piSees("Propose the run", 1);
+    narration.onAgentEvent({
+      type: "tool_execution_end",
+      toolCallId: "p",
+      toolName: "loom_propose",
+      result: { content: [{ type: "text", text: "Proposed prop-new\n| Label | Run |" }] },
+    });
+    narration.onAgentEvent({ type: "agent_end" });
+    const approve = message("/approve prop-new");
+    narration.onNotify("Approved prop-new (attempt 1, spec_revision 2)");
+    narration.onAgentEvent({ type: "agent_start" });
+    narration.onAgentEvent({
+      type: "message_start",
+      message: {
+        role: "user",
+        content: [
+          { type: "text", text: "[Orbit approval] The user approved prop-new. Submit it." },
+        ],
+        timestamp: 2,
+      },
+    });
+    expect(approve.userMessageId).toBeUndefined();
   });
 
   it("forgets lines a cleared chat took away, docked ones too", () => {

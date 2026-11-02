@@ -125,6 +125,27 @@ describe("What's Happening's Orbit wiring", () => {
     );
   });
 
+  it("keeps a run approved from an earlier session together with Orbit's follow-ups on it", () => {
+    const n = narration();
+    // No message in this session asked for prop-old; Orbit runs it after /approve.
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(
+      asked("[Orbit approval] The user approved prop-old. Submit exactly that run.", 7),
+    );
+    n.onAgentEvent({ type: "tool_execution_start", toolCallId: "r", toolName: "run_tool" });
+    n.onAgentEvent({
+      type: "tool_execution_end",
+      toolCallId: "r",
+      toolName: "run_tool",
+      result: { structuredContent: { success: true, data: { jobs: [{ id: "j1" }] } } },
+    });
+    n.onAgentEvent({ type: "agent_end" });
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(asked('[Orbit automatic Galaxy follow-up]\n[\n{"kind":"job","id":"j1"}\n]', 8));
+    n.onAgentEvent({ type: "agent_end" });
+    expect(groupsForUserMessage(n.state, "7").map((g) => g.id)).toEqual(["run-1", "run-2"]);
+  });
+
   it("lets a chat message answer a plan draft or a paused follow-up, but not a slash command", () => {
     const n = narration();
     n.onAgentEvent({ type: "agent_start" });

@@ -23,6 +23,12 @@ interface Line {
   text: string;
 }
 
+/** An /approve line, and the proposal whose run it may show. */
+interface Approval {
+  el: WhatsHappeningInlineElement;
+  proposalId: string;
+}
+
 /** Each line's bubble row, so a cleared chat takes its lines out of the dock too. */
 const rows = new WeakMap<WhatsHappeningInlineElement, HTMLElement>();
 const inChat = (el: WhatsHappeningInlineElement): boolean => rows.get(el)?.isConnected ?? false;
@@ -40,6 +46,7 @@ export function chatInlineHook(
   // Lines still waiting for their message, oldest first.
   let waiting: Line[] = [];
   let matched: WhatsHappeningInlineElement[] = [];
+  let approvals: Approval[] = [];
   const taken = new Set<string>();
 
   /** A cleared chat (/new, /clear) takes its lines with it, docked ones too. */
@@ -65,6 +72,20 @@ export function chatInlineHook(
         matched.push(line.el);
       }
     }
+    approvals = approvals.filter(({ el, proposalId }) => {
+      if (!inChat(el)) return false;
+      const run = state.groups.find((g) =>
+        g.messages[0]?.text.includes(`The user approved ${proposalId}.`),
+      );
+      if (!run) return true;
+      // Run for a message that asked for it shows in that message's line; else here.
+      const id = run.messages[0].id;
+      if (!run.followUpOfIds?.length && id) {
+        el.userMessageId = id;
+        matched.push(el);
+      }
+      return false;
+    });
     for (const el of matched) el.state = state;
   }
 
@@ -73,11 +94,16 @@ export function chatInlineHook(
   return (row, { text, replayed, id }) => {
     prune();
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
-    el.hideUntilAction = true;
+    el.hideIfNothingHappened = true;
     el.assistantName = "Orbit";
     el.className = "wh-inline";
     rows.set(el, row);
-    if (text.trim().startsWith("/")) {
+    const approved = /^\/approve\s+(prop-[\w-]+)/.exec(text.trim())?.[1];
+    if (approved) {
+      // Stacks in the dock beside the line of the message being worked on.
+      dock.append(el);
+      approvals.push({ el, proposalId: approved });
+    } else if (text.trim().startsWith("/")) {
       row.after(el);
     } else {
       // The docked line(s) join the chat, before this bubble; this one docks.
@@ -88,7 +114,7 @@ export function chatInlineHook(
       taken.add(id);
       el.userMessageId = id;
       matched.push(el);
-    } else if (!replayed) {
+    } else if (!replayed && !approved) {
       waiting.push({ el, text });
     }
     update(narration.state);

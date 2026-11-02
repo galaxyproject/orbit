@@ -399,7 +399,7 @@ describe("<whats-happening-inline>", () => {
     expect((await inline({ state, now: 1_000 })).shadowRoot!.childElementCount).toBe(0);
   });
 
-  it("with hide-until-action, stays hidden until the work touches Galaxy or asks the user", async () => {
+  it("with hide-if-nothing-happened, shows while the work goes, and hides it after if it touched nothing", async () => {
     const thinking = play([
       ...asked("m1", "Trim", 0, "u1"),
       { kind: "model", groupId: "m1", at: 500, activity: "thinking" },
@@ -407,9 +407,9 @@ describe("<whats-happening-inline>", () => {
     const el = await inline({ state: thinking, now: 1_000, userMessageId: "u1" });
     expect(line(el)).toBe("● Thinking… · 1s so far");
 
-    el.hideUntilAction = true;
+    el.hideIfNothingHappened = true;
     await el.updateComplete;
-    expect(el.shadowRoot!.childElementCount).toBe(0);
+    expect(line(el)).toBe("● Thinking… · 1s so far");
     el.state = advance(thinking, { kind: "group-end", groupId: "m1", at: 2_000 });
     await el.updateComplete;
     expect(el.shadowRoot!.childElementCount).toBe(0);
