@@ -161,13 +161,25 @@ export function cardTitle(group: NarrationGroup, ctx: DrawContext): string {
 }
 
 /** Where a card stands: at work and for how long, waiting on the user, stopped, or done. */
-export function cardState(group: NarrationGroup, ctx: DrawContext): string {
-  const took = elapsed((group.endedAt ?? ctx.now) - group.startedAt);
-  if (group.status === "active") return `⏳ ${took}`;
+export function cardState(
+  group: NarrationGroup,
+  ctx: DrawContext,
+  followUps: readonly NarrationGroup[] = [],
+): string {
+  const all = [group, ...followUps];
   if (group.status === "stopped") return "❌ Stopped";
   if (group.status === "waiting") return "⏸ Waiting for you";
-  if (group.entries.some((e) => e.status === "running")) return "⏳ Galaxy still working";
-  return `✅ Done in ${took}`;
+  if (all.some((g) => g.status === "active")) return `⏳ ${elapsed(ctx.now - group.startedAt)}`;
+  if (all.some((g) => g.entries.some((e) => e.status === "running")))
+    return "⏳ Galaxy still working";
+  return `✅ Done in ${elapsed(doneAt(all, ctx.now) - group.startedAt)}`;
+}
+
+/** When a message's work last ended: its turns, or the Galaxy work they started, whichever finished later. */
+export function doneAt(groups: readonly NarrationGroup[], now: number): number {
+  return Math.max(
+    ...groups.flatMap((g) => [g.endedAt ?? now, ...g.entries.map((e) => e.endedAt ?? 0)]),
+  );
 }
 
 /** "45s", "3m 05s". */

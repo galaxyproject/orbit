@@ -294,6 +294,71 @@ describe("<whats-happening> cards", () => {
   });
 });
 
+describe("<whats-happening> workflow runs", () => {
+  const buildUrl = (ref: { kind: string; id: string }) =>
+    `https://galaxy.test/${ref.kind}/${ref.id}`;
+  const progress = (completedJobs: number, totalJobs: number, at: number) => ({
+    totalSteps: 5,
+    completedSteps: 0,
+    totalJobs,
+    completedJobs,
+    failedJobs: 0,
+    at,
+  });
+  const invoked: NarrationEvent[] = [
+    ...asked("m1", "Run my workflow", 0),
+    { id: "w", toolName: "invoke_workflow", phase: "start", groupId: "m1", at: 1_000, args: {} },
+    {
+      id: "w",
+      toolName: "invoke_workflow",
+      phase: "end",
+      groupId: "m1",
+      at: 2_000,
+      result: { success: true, data: { id: "i1", state: "new" } },
+    },
+  ];
+
+  it('links a nameless run as "open in Galaxy", and counts its jobs only once there are some', async () => {
+    const state = play([
+      ...invoked,
+      {
+        kind: "job-state",
+        at: 5_000,
+        id: "i1",
+        state: "scheduled",
+        progress: progress(0, 0, 5_000),
+      },
+    ]);
+    const el = await mount({ state, now: 6_000, buildUrl });
+    const link = el.shadowRoot!.querySelector("a");
+    expect([link?.textContent, link?.getAttribute("href")]).toEqual([
+      "open in Galaxy",
+      "https://galaxy.test/invocation/i1",
+    ]);
+    expect(lines(el).join(" ")).not.toContain("0 of 0");
+
+    // Without a way into Galaxy, a nameless run isn't listed by its id at all.
+    const bare = await mount({ state, now: 6_000 });
+    expect(lines(bare).join(" ")).not.toContain("i1");
+  });
+
+  it("times a card to when its Galaxy work finished, not when the turn ended", async () => {
+    const state = play([
+      ...invoked,
+      { kind: "group-end", groupId: "m1", at: 3_000 },
+      {
+        kind: "job-state",
+        at: 60_000,
+        id: "i1",
+        state: "completed",
+        progress: progress(5, 5, 60_000),
+      },
+    ]);
+    const el = await mount({ state, now: 90_000 });
+    expect(lines(el)).toContain("✅ Done in 1m 00s");
+  });
+});
+
 describe("<whats-happening-inline>", () => {
   const inlineTag = defineWhatsHappeningInline();
   async function inline(

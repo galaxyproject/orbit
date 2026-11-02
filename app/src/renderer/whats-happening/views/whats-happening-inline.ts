@@ -15,7 +15,15 @@ import { groupsForUserMessage, runEnded } from "../core/narrator.js";
 import { rowsOf } from "../core/rows.js";
 import type { NarrationGroup } from "../core/types.js";
 import { cardBody, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
-import { elapsed, NarrationView, nowText, partStyles, shorten, type DrawContext } from "./parts.js";
+import {
+  doneAt,
+  elapsed,
+  NarrationView,
+  nowText,
+  partStyles,
+  shorten,
+  type DrawContext,
+} from "./parts.js";
 
 export class WhatsHappeningInlineElement extends NarrationView {
   static override properties = {
@@ -85,8 +93,7 @@ function inlineLine(
   ctx: DrawContext,
 ): TemplateResult | string {
   const all = [main, ...followUps];
-  const ended = Math.max(...all.map((g) => g.endedAt ?? ctx.now));
-  const took = elapsed((all.every(isFinished) ? ended : ctx.now) - main.startedAt);
+  const took = elapsed((all.every(isFinished) ? doneAt(all, ctx.now) : ctx.now) - main.startedAt);
   // Whatever is at work right now: the message's own work, or a follow-up on it.
   const live = all.find((g) => g.status === "active" && g.now);
   if (live?.now) return `● ${nowText(live.now, ctx)} · ${took} so far`;

@@ -65,7 +65,7 @@ export function card(
 ): TemplateResult {
   const header = html`<header>
     <span>${cardTitle(group, ctx)}</span>
-    <span class="state">${cardState(group, ctx)}</span>
+    <span class="state">${cardState(group, ctx, followUps)}</span>
   </header>`;
   const body = cardBody(group, ctx, followUps);
   if (!isFinished(group) || followUps.some((f) => !isFinished(f))) {
@@ -156,8 +156,11 @@ function stoppedLine(group: NarrationGroup, ctx: DrawContext): TemplateResult | 
 /** One change: its outcome, what it made, why it failed, its earlier tries, its run, its checks. */
 function changeRow(row: NarrationRow, ctx: DrawContext): TemplateResult {
   const entry = row.change;
+  // A nameless output is only worth showing as a link into Galaxy.
   const outputs = LINKED_KINDS.flatMap((kind) =>
-    entry.galaxyRefs.filter((r) => r.role === "output" && r.kind === kind),
+    entry.galaxyRefs.filter(
+      (r) => r.role === "output" && r.kind === kind && (r.label !== r.id || ctx.buildUrl?.(r)),
+    ),
   );
   const lost = entry.startedRuns?.find((r) => r.untracked);
   // The harness's own description of the run, quoted so it isn't read as the workflow's name.
@@ -210,9 +213,11 @@ function titleOf(entry: NarrationEntry): string {
 /** A link into Galaxy for a ref, or its label alone when the host can't link to it. */
 function link(ref: GalaxyRef, ctx: DrawContext): TemplateResult {
   const url = ctx.buildUrl?.(ref);
+  // Galaxy's ids mean nothing to a reader; a ref with no name or number is just a way in.
+  const text = ref.label === ref.id ? "open in Galaxy" : ref.label;
   return url
-    ? html`<a href=${url} target="_blank" rel="noopener noreferrer">${ref.label}</a> `
-    : html`<span>${ref.label}</span> `;
+    ? html`<a href=${url} target="_blank" rel="noopener noreferrer">${text}</a> `
+    : html`<span>${text}</span> `;
 }
 
 /**
@@ -243,7 +248,8 @@ function workflowRun(
   if (run.kind !== "invocation" || (!run.steps && !run.progress)) return nothing;
   const steps = run.steps ?? [];
   const jobs = steps.flatMap((s) => s.jobs ?? []);
-  const progress = run.progress
+  // Counts only once Galaxy has reported jobs: "0 of 0 jobs done" says nothing.
+  const progress = run.progress?.totalJobs
     ? `${run.progress.completedJobs} of ${run.progress.totalJobs} jobs done${
         run.progress.failedJobs ? ` · ${run.progress.failedJobs} failed` : ""
       }`
