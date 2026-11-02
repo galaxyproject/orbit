@@ -60,7 +60,9 @@ or `defineWhatsHappeningInline()` for the one-line view (or both), and set its
 `state` after each change.
 `<whats-happening>` shows every message's work; `<whats-happening-inline
 user-message-id="…">` shows one message's work on one line, e.g. under its chat
-bubble. Optionally give them `buildUrl` (links into Galaxy) and `assistant-name`
+bubble. Give the inline one `hide-until-action` to keep it hidden until the
+message's work touches Galaxy or asks the user something, so chat-only replies
+add nothing under their bubble. Optionally give them `buildUrl` (links into Galaxy) and `assistant-name`
 (e.g. "Orbit"). Restyle them with `--wh-*` CSS custom properties.
 
 Tests: `tests/narration-core.test.ts`, `tests/narration-pi-adapter.test.ts`,

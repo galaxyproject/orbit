@@ -78,8 +78,8 @@ describe("<whats-happening>", () => {
       "⏳ 10s",
       "● Thinking… (9s)",
       'You asked: "Download the runs"',
+      // Nothing done in Galaxy: just the header, no "Answered without…" line.
       "✅ Done in 5s",
-      "Answered without running anything in Galaxy",
     ]);
   });
 
@@ -334,6 +334,34 @@ describe("<whats-happening-inline>", () => {
     expect((await inline({ state, now: 1_000 })).shadowRoot!.childElementCount).toBe(0);
   });
 
+  it("with hide-until-action, stays hidden until the work touches Galaxy or asks the user", async () => {
+    const thinking = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "model", groupId: "m1", at: 500, activity: "thinking" },
+    ]);
+    const el = await inline({ state: thinking, now: 1_000, userMessageId: "u1" });
+    expect(line(el)).toBe("● Thinking… · 1s so far");
+
+    el.hideUntilAction = true;
+    await el.updateComplete;
+    expect(el.shadowRoot!.childElementCount).toBe(0);
+    el.state = advance(thinking, { kind: "group-end", groupId: "m1", at: 2_000 });
+    await el.updateComplete;
+    expect(el.shadowRoot!.childElementCount).toBe(0);
+
+    el.state = play([...asked("m1", "Trim", 0, "u1"), ranOne[0]]);
+    await el.updateComplete;
+    expect(line(el)).toMatch(/^● Running fastp/);
+
+    el.state = play([
+      ...asked("m1", "Trim", 0, "u1"),
+      { kind: "awaiting-user", groupId: "m1", at: 500, id: "p1", text: "approve the run" },
+      { kind: "group-end", groupId: "m1", at: 600 },
+    ]);
+    await el.updateComplete;
+    expect(line(el)).toMatch(/^⏸ To continue, approve the run/);
+  });
+
   it("says in one line where the message's work stands, folded over its card", async () => {
     const working = play([
       ...asked("m1", "Trim", 0, "u1"),
@@ -436,8 +464,7 @@ describe("<whats-happening-inline>", () => {
     ]);
     const el = await inline({ state, now: 4_000, userMessageId: "u1" });
     expect(el.shadowRoot!.querySelectorAll("section.card")).toHaveLength(1);
-    expect(line(el)).toBe(
-      "✅ Done in 1s · Answered without running anything in Galaxy+1 more in Activity",
-    );
+    // Nothing done in Galaxy: no summary, and no dot left dangling before it.
+    expect(line(el)).toBe("✅ Done in 1s+1 more in Activity");
   });
 });

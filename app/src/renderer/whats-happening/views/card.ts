@@ -78,9 +78,8 @@ export function card(
   return html`<section class="card">
     ${header}${group.status === "stopped" ? stoppedLine(group, ctx) : nothing}
     ${
-      hasRows
-        ? fold(`card:${group.id}`, false, html`${summary}`, body, ctx, "summary")
-        : html`<div class="note">${summary}</div>`
+      // Nothing done in Galaxy: the header alone.
+      hasRows ? fold(`card:${group.id}`, false, html`${summary}`, body, ctx, "summary") : nothing
     }
   </section>`;
 }
@@ -93,7 +92,10 @@ export function isFinished(group: NarrationGroup): boolean {
   );
 }
 
-/** "3 changes to your Galaxy · 1 failed", or what the card did when it changed nothing. */
+/**
+ * "3 changes to your Galaxy · 1 failed", or what the card looked at; empty when
+ * it did nothing in Galaxy, since the harness's own reply already says so.
+ */
 export function summaryLine(
   group: NarrationGroup,
   followUps: readonly NarrationGroup[],
@@ -109,8 +111,6 @@ export function summaryLine(
     parts.push(
       `Looked at your Galaxy (${checks.length} check${checks.length === 1 ? "" : "s"}), changed nothing`,
     );
-  } else {
-    parts.push("Answered without running anything in Galaxy");
   }
   if (followUps.length > 0) parts.push(followedUpLabel(followUps.length, ctx));
   return parts.join(" · ");
@@ -123,7 +123,6 @@ function cardBody(
   followUps: readonly NarrationGroup[],
 ): TemplateResult {
   const { rows, checks } = rowsOf(group);
-  const quiet = rows.length === 0 && checks.length === 0;
   return html`
     ${
       group.status === "active" && group.now
@@ -144,11 +143,6 @@ function cardBody(
         : nothing
     }
     ${checks.length > 0 ? checksFold(`checks:${group.id}`, checks, ctx) : nothing}
-    ${
-      quiet && group.status !== "active" && group.status !== "stopped"
-        ? html`<div class="note">Answered without running anything in Galaxy</div>`
-        : nothing
-    }
     ${followUps.length > 0 ? followUpsFold(group, followUps, ctx) : nothing}
   `;
 }

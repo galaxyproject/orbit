@@ -11,6 +11,7 @@
 import { css, html, nothing, type TemplateResult } from "lit";
 
 import { groupsForUserMessage } from "../core/narrator.js";
+import { rowsOf } from "../core/rows.js";
 import type { NarrationGroup } from "../core/types.js";
 import { card, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
 import { elapsed, NarrationView, nowText, partStyles, shorten, type DrawContext } from "./parts.js";
@@ -19,10 +20,23 @@ export class WhatsHappeningInlineElement extends NarrationView {
   static override properties = {
     ...NarrationView.properties,
     userMessageId: { type: String, attribute: "user-message-id" },
+    hideUntilAction: { type: Boolean, attribute: "hide-until-action" },
   };
 
   /** The user message whose work to show. */
   declare userMessageId?: string;
+
+  /**
+   * Draw nothing until the message's work touches Galaxy or asks the user
+   * something, for a host whose chat already shows the assistant thinking and
+   * replying. Off by default.
+   */
+  declare hideUntilAction: boolean;
+
+  constructor() {
+    super();
+    this.hideUntilAction = false;
+  }
 
   static override styles = [
     partStyles,
@@ -45,6 +59,7 @@ export class WhatsHappeningInlineElement extends NarrationView {
     if (!main) return nothing;
     const followUps = groups.filter((g) => hostOf(ctx.state, g) === main);
     const more = groups.filter((g) => g !== main && !followUps.includes(g)).length;
+    if (this.hideUntilAction && !tookAction(groups)) return nothing;
     const key = `inline:${main.id}`;
     const open = ctx.isOpen(key, false);
     const onToggle = (event: Event) => {
@@ -81,7 +96,16 @@ function inlineLine(
   if (main.status === "stopped") {
     return `❌ Stopped after ${took}${main.error ? `: ${shorten(main.error, 120)}` : ""}`;
   }
-  return `✅ Done in ${took} · ${summaryLine(main, followUps, ctx)}`;
+  const summary = summaryLine(main, followUps, ctx);
+  return summary ? `✅ Done in ${took} · ${summary}` : `✅ Done in ${took}`;
+}
+
+/** Whether any of this work touched Galaxy or is waiting on the user. */
+function tookAction(groups: readonly NarrationGroup[]): boolean {
+  return groups.some((g) => {
+    const { rows, checks } = rowsOf(g);
+    return rows.length > 0 || checks.length > 0 || (g.waitingFor?.length ?? 0) > 0;
+  });
 }
 
 /** Registers the element under a tag name, once; returns the tag it is defined under. */
