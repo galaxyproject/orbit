@@ -255,6 +255,29 @@ describe("What's Happening's Orbit wiring", () => {
     expect(n.state.groups).toHaveLength(3);
   });
 
+  it("forgets everything for a fresh session, and starts its work over", async () => {
+    const n = narration();
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(asked("Upload my reads", 1));
+    n.onAgentEvent(proposed);
+    expect(waits(n)).toHaveLength(1);
+
+    const seen: unknown[] = [];
+    n.subscribe((state) => seen.push(state));
+    n.reset();
+    expect(n.state.groups).toEqual([]);
+    expect(currentActivity(n.state)).toEqual([]);
+    expect(seen).toEqual([n.state]);
+
+    // The new session's work starts from the first group, and a resume can rebuild it.
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(asked("How many histories?", 2));
+    expect(n.state.groups.map((g) => g.id)).toEqual(["run-1"]);
+    n.reset();
+    await n.restore([{ role: "user", text: "Upload my reads", timestamp: 1 }]);
+    expect(n.state.groups).toHaveLength(1);
+  });
+
   it("reads a workflow run's counts from its notebook block", () => {
     const notebook = [
       "```orbit-invocation",

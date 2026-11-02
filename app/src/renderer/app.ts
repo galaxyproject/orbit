@@ -1726,6 +1726,7 @@ function resetUiForFreshContext(opts: { clearPersistedCost?: boolean } = {}): vo
   notebookLoadSeq++;
   chat.clear();
   artifacts.clear();
+  whatsHappening.reset();
   clearQueue();
   sessionUsage.input = 0;
   sessionUsage.output = 0;

@@ -60,6 +60,8 @@ export interface OrbitNarration {
    * Resolves once Galaxy job states have been read for the rebuilt work.
    */
   restore: (history: readonly ReplaySegment[]) => Promise<void>;
+  /** Forgets everything, for a fresh session (/new, another analysis folder). */
+  reset: () => void;
   /** Stops the periodic job reads and drops every listener. */
   dispose: () => void;
 }
@@ -272,6 +274,15 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
     await syncJobs(true);
   }
 
+  function reset(): void {
+    state = EMPTY_STATE;
+    pi = PI_ADAPTER_START;
+    seenJobRows.clear();
+    sentProgress.clear();
+    finalProgress.clear();
+    for (const listener of listeners) listener(state);
+  }
+
   const syncEveryMs = host.syncEveryMs ?? 15_000;
   const timer = syncEveryMs > 0 ? setInterval(() => void syncJobs(), syncEveryMs) : undefined;
 
@@ -288,6 +299,7 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
     onUserText,
     syncJobs: () => syncJobs(),
     restore,
+    reset,
     dispose() {
       clearInterval(timer);
       listeners.clear();
