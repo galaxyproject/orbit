@@ -1659,7 +1659,7 @@ describe("the message a group serves", () => {
     expect(followUp).toMatchObject({
       followUp: true,
       about: [{ kind: "job", id: "j1" }],
-      followUpOf: ["m1"],
+      followUpOfIds: ["m1"],
     });
     expect(anchorUserMessage(state, followUp)?.text).toBe("Trim the reads");
     expect(groupsForUserMessage(state, "u1").map((g) => g.id)).toEqual(["m1", "f1"]);
@@ -1685,7 +1685,7 @@ describe("the message a group serves", () => {
       },
     ]);
     const followUp = state.groups[1];
-    expect(followUp.followUpOf).toBeUndefined();
+    expect(followUp.followUpOfIds).toBeUndefined();
     expect(anchorUserMessage(state, followUp)).toBeUndefined();
   });
 });

@@ -29,10 +29,10 @@ export const PI_ADAPTER_START: PiAdapterState = { runs: 0, groupId: "run-0", ret
 export interface PiAdapterOptions {
   /**
    * Tells the harness's own messages from the user's: for a message the harness
-   * sent itself (a follow-up on Galaxy work, say), what it is about; undefined
-   * for a message from the user.
+   * sent itself (a follow-up on Galaxy work, say), what it is about and which
+   * request it answers; undefined for a message from the user.
    */
-  harnessMessage?: (text: string) => { about?: GalaxyRunRef[] } | undefined;
+  harnessMessage?: (text: string) => { about?: GalaxyRunRef[]; answerId?: string } | undefined;
   /** A model error in the harness's own words. */
   describeModelError?: (message: string) => string;
 }
@@ -144,6 +144,7 @@ export function fromPiEvent(
       followUp: harness !== undefined,
       ...(stamp !== undefined ? { messageId } : {}),
       ...(harness?.about?.length ? { about: harness.about } : {}),
+      ...(harness?.answerId ? { answerId: harness.answerId } : {}),
     });
     return { state: next, events };
   }

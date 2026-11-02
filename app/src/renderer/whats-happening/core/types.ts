@@ -140,6 +140,8 @@ export type LifecycleEvent =
       messageId?: string;
       /** For a follow-up: the Galaxy jobs or workflow invocations it is about. */
       about?: readonly GalaxyRunRef[];
+      /** For a follow-up: the id of the request it answers (an `awaiting-user` id, e.g. an approved proposal's). */
+      answerId?: string;
     }
   | { kind: "model"; at: number; activity: "thinking" | "writing" | "tool-call"; groupId: string }
   | { kind: "group-end"; at: number; error?: string; groupId: string }
@@ -245,8 +247,10 @@ export interface NarrationGroup {
   followUp: boolean;
   /** For a follow-up: the Galaxy jobs or workflow invocations it is about, as the harness named them. */
   about?: readonly GalaxyRunRef[];
-  /** For a follow-up: the groups that started that Galaxy work. */
-  followUpOf?: readonly string[];
+  /** For a follow-up: the groups that started that Galaxy work, or asked the request it answers. */
+  followUpOfIds?: readonly string[];
+  /** The ids of every request this group asked the user, kept after they are answered. */
+  askedIds?: readonly string[];
   /** `waiting`: the group ended, and the harness is waiting on the user (see `waitingFor`). */
   status: "active" | "done" | "stopped" | "waiting";
   /** Only while active. */

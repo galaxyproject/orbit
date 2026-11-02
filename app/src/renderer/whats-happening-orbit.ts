@@ -66,10 +66,14 @@ export interface OrbitNarration {
 
 /**
  * Orbit's own messages ("[Orbit automatic Galaxy follow-up]", "[Orbit check] …",
- * and upstream's one leftover "[Loom check]") aren't the user's.
+ * and upstream's one leftover "[Loom check]") aren't the user's. The run Orbit
+ * starts after an /approve ("[Orbit approval] The user approved prop-…")
+ * answers that proposal, so it belongs with the work that proposed it.
  */
-function harnessMessage(text: string): { about: GalaxyRunRef[] } | undefined {
-  return /^\[(?:Orbit|Loom) /.test(text) ? { about: followUpRuns(text) } : undefined;
+function harnessMessage(text: string): { about: GalaxyRunRef[]; answerId?: string } | undefined {
+  if (!/^\[(?:Orbit|Loom) /.test(text)) return undefined;
+  const approved = /^\[Orbit approval\] The user approved (prop-[\w-]+)/.exec(text)?.[1];
+  return { about: followUpRuns(text), ...(approved ? { answerId: approved } : {}) };
 }
 
 /** Waits a plain chat message answers; a proposal waits for Orbit's "Approved prop-…". */

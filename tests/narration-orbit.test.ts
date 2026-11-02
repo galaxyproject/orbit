@@ -7,7 +7,10 @@ import {
   planTitle,
   type OrbitNarrationHost,
 } from "../app/src/renderer/whats-happening-orbit.js";
-import { currentActivity } from "../app/src/renderer/whats-happening/core/narrator.js";
+import {
+  currentActivity,
+  groupsForUserMessage,
+} from "../app/src/renderer/whats-happening/core/narrator.js";
 
 /** A narration over fake Orbit files, its clock one second further on each call. */
 function narration(files: Record<string, string> = {}) {
@@ -55,6 +58,41 @@ describe("What's Happening's Orbit wiring", () => {
 
     n.onNotify("Approved prop-ab12 (attempt 01X, spec_revision bda8)");
     expect(waits(n)).toEqual([]);
+  });
+
+  it("keeps the run Orbit starts after /approve, and its follow-ups, with the message that asked", () => {
+    const n = narration();
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(asked("Run my workflow on simple data", 1));
+    n.onAgentEvent(proposed);
+    n.onAgentEvent({ type: "agent_end" });
+    n.onUserText("/approve prop-ab12");
+    n.onNotify("Approved prop-ab12 (attempt 01X, spec_revision bda8)");
+
+    // Orbit's own run of the approved proposal starts a Galaxy job.
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(
+      asked("[Orbit approval] The user approved prop-ab12. Submit exactly that run now.", 2),
+    );
+    n.onAgentEvent({ type: "tool_execution_start", toolCallId: "r", toolName: "run_tool" });
+    n.onAgentEvent({
+      type: "tool_execution_end",
+      toolCallId: "r",
+      toolName: "run_tool",
+      result: { structuredContent: { success: true, data: { jobs: [{ id: "j1" }] } } },
+    });
+    n.onAgentEvent({ type: "agent_end" });
+    // Later, Orbit's poller follows up on that job.
+    n.onAgentEvent({ type: "agent_start" });
+    n.onAgentEvent(asked('[Orbit automatic Galaxy follow-up]\n[\n{"kind":"job","id":"j1"}\n]', 3));
+    n.onAgentEvent({ type: "agent_end" });
+
+    expect(n.state.groups.map((g) => g.id)).toEqual(["run-1", "run-2", "run-3"]);
+    expect(groupsForUserMessage(n.state, "1").map((g) => g.id)).toEqual([
+      "run-1",
+      "run-2",
+      "run-3",
+    ]);
   });
 
   it("lets a chat message answer a plan draft or a paused follow-up, but not a slash command", () => {

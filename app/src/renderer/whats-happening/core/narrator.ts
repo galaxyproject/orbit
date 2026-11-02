@@ -128,14 +128,17 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
           at: event.at,
           by: event.followUp ? "harness" : "user",
         };
-        const followUpOf = event.about ? groupsThatStarted(state, event.about) : [];
+        const followUpOfIds = [
+          ...(event.about ? groupsThatStarted(state, event.about) : []),
+          ...(event.answerId ? groupsThatAsked(state, event.answerId) : []),
+        ];
         return {
           ...g,
           messages: [...g.messages, message],
           // A group the harness started stays its own, even once the user adds a message.
           followUp: g.messages.length === 0 ? event.followUp : g.followUp,
           ...(event.about?.length ? { about: event.about } : {}),
-          ...(followUpOf.length > 0 ? { followUpOf } : {}),
+          ...(followUpOfIds.length > 0 ? { followUpOfIds } : {}),
           now:
             event.followUp && g.now?.text === "Reading your request…"
               ? {
@@ -176,10 +179,16 @@ export function advance(state: NarrationState, event: NarrationEvent): Narration
         same === -1
           ? [...pending, request]
           : pending.map((r, i) => (i === same ? { ...r, text: event.text } : r));
-      const updated: NarrationGroup =
-        last.status === "done"
-          ? { ...last, status: "waiting", waitingFor }
-          : { ...last, waitingFor };
+      const askedIds =
+        event.id && !last.askedIds?.includes(event.id)
+          ? [...(last.askedIds ?? []), event.id]
+          : last.askedIds;
+      const updated: NarrationGroup = {
+        ...last,
+        ...(last.status === "done" ? { status: "waiting" as const } : {}),
+        waitingFor,
+        ...(askedIds ? { askedIds } : {}),
+      };
       return { ...state, groups: replaced(state.groups, index, updated) };
     }
     case "user-replied": {
@@ -604,6 +613,11 @@ function replaced<T>(items: readonly T[], index: number, item: T): T[] {
 }
 
 /** The groups whose calls started any of these Galaxy jobs or invocations, in order. */
+/** The groups that asked the user the request with this id. */
+function groupsThatAsked(state: NarrationState, id: string): string[] {
+  return state.groups.filter((g) => g.askedIds?.includes(id)).map((g) => g.id);
+}
+
 function groupsThatStarted(state: NarrationState, runs: readonly GalaxyRunRef[]): string[] {
   const started = (r: GalaxyRun): boolean =>
     runs.some((ref) => ref.kind === r.kind && ref.id === r.id);
@@ -625,7 +639,7 @@ export function anchorUserMessage(
   const ownUserMessage = group.messages.find((m) => m.by === "user");
   if (ownUserMessage) return ownUserMessage;
   const visited = new Set([...seen, group.id]);
-  for (const id of group.followUpOf ?? []) {
+  for (const id of group.followUpOfIds ?? []) {
     const origin = state.groups.find((g) => g.id === id);
     if (!origin || visited.has(id)) continue;
     const originUserMessage = anchorUserMessage(state, origin, visited);
