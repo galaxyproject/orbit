@@ -116,6 +116,56 @@ describe("What's Happening's Orbit wiring", () => {
     expect(seen).toHaveLength(1);
   });
 
+  it("rebuilds from a resumed session: a card per message, jobs from the whole activity log", async () => {
+    const finished = JSON.stringify({
+      timestamp: "2026-11-01T00:00:10Z",
+      kind: "poll.transition",
+      payload: { id: "j1", to: "completed", galaxyState: "ok" },
+    });
+    const n = narration({ "activity.jsonl": finished });
+    const restored = n.restore([
+      { role: "user", text: "Run cat on my reads", timestamp: 100 },
+      {
+        role: "assistant",
+        text: "",
+        timestamp: 200,
+        tools: [
+          {
+            id: "c1",
+            name: "run_tool",
+            arguments: { tool_id: "cat1" },
+            resultText: '{"success":true,"data":{"jobs":[{"id":"j1"}]}}',
+            startedAt: 300,
+            endedAt: 400,
+          },
+          {
+            id: "c2",
+            name: "loom_propose",
+            resultText: "Proposed prop-ab12\n| Label | Next step |",
+            endedAt: 500,
+          },
+        ],
+      },
+      { role: "user", text: "How many histories?", timestamp: 900 },
+    ]);
+    expect(n.state.groups.map((g) => [g.messages[0].id, g.startedAt, g.endedAt])).toEqual([
+      ["100", 100, 500],
+      ["900", 900, 900],
+    ]);
+    // A proposal from before can't be known to still be waiting.
+    expect(waits(n)).toEqual([]);
+
+    expect(n.state.galaxyRunning).toHaveLength(1);
+    await restored;
+    expect(n.state.groups[0].entries[0].status).toBe("done");
+
+    // Live work carries on in new groups; a second restore changes nothing.
+    n.onAgentEvent({ type: "agent_start" });
+    expect(n.state.groups.map((g) => g.id)).toEqual(["run-1", "run-2", "run-3"]);
+    await n.restore([{ role: "user", text: "again", timestamp: 1 }]);
+    expect(n.state.groups).toHaveLength(3);
+  });
+
   it("reads a workflow run's counts from its notebook block", () => {
     const notebook = [
       "```orbit-invocation",

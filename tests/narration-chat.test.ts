@@ -15,11 +15,11 @@ function chat() {
   const hook = chatInlineHook(narration);
   const container = document.createElement("div");
   document.body.append(container);
-  const message = (text: string, replayed = false): WhatsHappeningInlineElement => {
+  const message = (text: string, replayed = false, id?: string): WhatsHappeningInlineElement => {
     const el = document.createElement("div");
     el.className = "user-turn";
     container.append(el);
-    hook(el, text, replayed);
+    hook(el, { text, replayed, ...(id ? { id } : {}) });
     return el.nextElementSibling as WhatsHappeningInlineElement;
   };
   // pi seeing a message: a run starting with it, its timestamp as its id.
@@ -60,8 +60,12 @@ describe("What's Happening under Orbit's chat messages", () => {
     ]);
   });
 
-  it("leaves replayed bubbles unmatched, so new work never lands under an old bubble", () => {
-    const { message, piSees } = chat();
+  it("matches a replayed bubble by its id, and never by its text", () => {
+    const { message, piSees, narration } = chat();
+    const known = message("Trim the reads", true, "3");
+    expect(known.userMessageId).toBe("3");
+    expect(known.state).toBe(narration.state);
+
     const old = message("How many histories?", true);
     const fresh = message("How many histories?");
     piSees("How many histories?", 5);

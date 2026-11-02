@@ -11,6 +11,7 @@
 import { fromPiEvent, messageText, PI_ADAPTER_START } from "./whats-happening/adapters/pi.js";
 import { advance, EMPTY_STATE } from "./whats-happening/core/narrator.js";
 import type { GalaxyRunRef, NarrationEvent, NarrationState } from "./whats-happening/core/types.js";
+import type { ReplaySegment } from "../preload/preload.js";
 
 /** What the wiring needs from Orbit. */
 export interface OrbitNarrationHost {
@@ -40,8 +41,35 @@ export interface OrbitNarration {
   onUserText: (text: string) => void;
   /** Reads Galaxy job states from Orbit's files and feeds any that changed. */
   syncJobs: () => Promise<void>;
+  /**
+   * Rebuilds the narration from a resumed session's replay, the same one the
+   * chat redraws its old messages from (`agent:session-history`). Does nothing
+   * once the narration has work in it.
+   *
+   * Desktop only for now: the browser shell has no session replay
+   * (`replayChat` in web/orbit-shim.ts), so after a reload there the narration
+   * starts empty, like the chat. If the browser ever replays a session through
+   * `agent:session-history`, this comes along with no change.
+   *
+   * Forgiving by design, since What's Happening is mostly about what is
+   * happening now: the session file keeps messages and tool calls, not
+   * everything seen live. Timings are approximate, model errors are left out,
+   * and Orbit's approval and plan waits aren't replayed, since nothing records
+   * whether they were answered.
+   *
+   * Resolves once Galaxy job states have been read for the rebuilt work.
+   */
+  restore: (history: readonly ReplaySegment[]) => Promise<void>;
   /** Stops the periodic job reads and drops every listener. */
   dispose: () => void;
+}
+
+/**
+ * Orbit's own messages ("[Orbit automatic Galaxy follow-up]", "[Orbit check] …",
+ * and upstream's one leftover "[Loom check]") aren't the user's.
+ */
+function harnessMessage(text: string): { about: GalaxyRunRef[] } | undefined {
+  return /^\[(?:Orbit|Loom) /.test(text) ? { about: followUpRuns(text) } : undefined;
 }
 
 /** Waits a plain chat message answers; a proposal waits for Orbit's "Approved prop-…". */
@@ -66,13 +94,14 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
   const finalProgress = new Set<string>();
   let syncing = false;
 
-  async function syncJobs(): Promise<void> {
+  /** `whole` reads all of activity.jsonl rather than its end, for jobs that finished long ago. */
+  async function syncJobs(whole = false): Promise<void> {
     if (syncing) return;
     syncing = true;
     try {
       await syncInvocationProgress();
       if (!state.galaxyRunning.some((w) => w.galaxyId)) return;
-      const res = await host.readFile("activity.jsonl", { tail: true });
+      const res = await host.readFile("activity.jsonl", whole ? undefined : { tail: true });
       if (!res.ok) return;
       for (const line of new TextDecoder("utf-8").decode(res.bytes).split("\n")) {
         const event = jobStateFromActivity(line, seenJobRows, now());
@@ -115,10 +144,7 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
     const type = event.type as string | undefined;
     const at = now();
     const step = fromPiEvent(pi, event, at, {
-      // Orbit's own messages ("[Orbit automatic Galaxy follow-up]", "[Orbit check] …",
-      // and upstream's one leftover "[Loom check]") aren't the user's.
-      harnessMessage: (text) =>
-        /^\[(?:Orbit|Loom) /.test(text) ? { about: followUpRuns(text) } : undefined,
+      harnessMessage,
       describeModelError: host.describeModelError,
     });
     pi = step.state;
@@ -186,6 +212,60 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
     for (const id of ANSWERED_BY_A_MESSAGE) apply({ kind: "user-replied", at: now(), id });
   }
 
+  async function restore(history: readonly ReplaySegment[]): Promise<void> {
+    if (state.groups.length > 0) return;
+    const options = { harnessMessage, describeModelError: host.describeModelError };
+    const feed = (event: Record<string, unknown>, at: number): void => {
+      const step = fromPiEvent(pi, event, at, options);
+      pi = step.state;
+      for (const narration of step.events) apply(narration);
+    };
+    // One run per user message, ending at the last thing it did.
+    let open = false;
+    let last = 0;
+    for (const segment of history) {
+      const at = segment.timestamp ?? last;
+      if (segment.role === "user") {
+        if (open) feed({ type: "agent_end" }, last);
+        feed({ type: "agent_start" }, at);
+        open = true;
+        feed(
+          {
+            type: "message_start",
+            message: {
+              role: "user",
+              content: [{ type: "text", text: segment.text }],
+              timestamp: segment.timestamp,
+            },
+          },
+          at,
+        );
+        last = at;
+        continue;
+      }
+      if (!open) continue;
+      for (const tool of segment.tools ?? []) {
+        const started = tool.startedAt ?? at;
+        const ended = tool.endedAt ?? started;
+        const common = { toolCallId: tool.id, toolName: tool.name };
+        feed({ type: "tool_execution_start", ...common, args: tool.arguments }, started);
+        feed(
+          {
+            type: "tool_execution_end",
+            ...common,
+            isError: tool.isError === true,
+            result: { content: [{ type: "text", text: tool.resultText ?? "" }] },
+          },
+          ended,
+        );
+        last = Math.max(last, ended);
+      }
+      last = Math.max(last, at);
+    }
+    if (open) feed({ type: "agent_end" }, last);
+    await syncJobs(true);
+  }
+
   const syncEveryMs = host.syncEveryMs ?? 15_000;
   const timer = syncEveryMs > 0 ? setInterval(() => void syncJobs(), syncEveryMs) : undefined;
 
@@ -200,7 +280,8 @@ export function createOrbitNarration(host: OrbitNarrationHost): OrbitNarration {
     onAgentEvent,
     onNotify,
     onUserText,
-    syncJobs,
+    syncJobs: () => syncJobs(),
+    restore,
     dispose() {
       clearInterval(timer);
       listeners.clear();

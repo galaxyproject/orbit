@@ -2,10 +2,11 @@
  * What's Happening under Orbit's chat messages: a `<whats-happening-inline>`
  * line under each user bubble, showing what Orbit did for that message.
  *
- * A bubble is drawn before pi has seen its message, and pi's message id (its
- * timestamp) arrives later through the narration. So each line starts without
- * an id and is matched to its message when the message shows up: by its text,
- * in the order the messages were sent.
+ * A live bubble is drawn before pi has seen its message, and pi's message id
+ * (its timestamp) arrives later through the narration. So its line starts
+ * without an id and is matched to its message when the message shows up: by
+ * its text, in the order the messages were sent. A replayed bubble comes with
+ * its id.
  */
 
 import {
@@ -13,6 +14,7 @@ import {
   type WhatsHappeningInlineElement,
 } from "./whats-happening/views/whats-happening-inline.js";
 import type { NarrationState } from "./whats-happening/core/types.js";
+import type { UserMessageDrawn } from "./chat/chat-panel.js";
 import type { OrbitNarration } from "./whats-happening-orbit.js";
 
 /** One user bubble's line, and the text it is matched by. */
@@ -22,14 +24,13 @@ interface Line {
 }
 
 /**
- * Returns the hook for `ChatPanel.setUserMessageHook`. Replayed bubbles get a line
- * too, but stay unmatched: the narration doesn't survive a reload yet, so
- * matching them would hand a new message's work to an old bubble with the same
- * words.
+ * Returns the hook for `ChatPanel.setUserMessageHook`. A replayed bubble without
+ * an id stays unmatched, so a new message's work never lands under an old
+ * bubble with the same words.
  */
 export function chatInlineHook(
   narration: OrbitNarration,
-): (row: HTMLElement, text: string, replayed: boolean) => void {
+): (row: HTMLElement, message: UserMessageDrawn) => void {
   const tag = defineWhatsHappeningInline();
   // Lines still waiting for their message, oldest first.
   let waiting: Line[] = [];
@@ -57,14 +58,19 @@ export function chatInlineHook(
 
   narration.subscribe(update);
 
-  return (row, text, replayed) => {
+  return (row, { text, replayed, id }) => {
     const el = document.createElement(tag) as WhatsHappeningInlineElement;
     el.hideUntilAction = true;
     el.assistantName = "Orbit";
     el.className = "wh-inline";
     row.after(el);
-    if (replayed) return;
-    waiting.push({ el, text });
+    if (id) {
+      taken.add(id);
+      el.userMessageId = id;
+      matched.push(el);
+    } else if (!replayed) {
+      waiting.push({ el, text });
+    }
     update(narration.state);
   };
 }

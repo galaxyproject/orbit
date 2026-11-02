@@ -1808,10 +1808,11 @@ window.orbit.onSessionHistory((history) => {
   if (history.length === 0) return;
   if (chat.hasContent()) return;
   chat.addInfoMessage("<i>— Resumed previous session —</i>");
+  void whatsHappening.restore(history);
   let replayNum = 0;
   for (const seg of history) {
     if (seg.role === "user") {
-      chat.addReplayUserMessage(seg.text, ++replayNum);
+      chat.addReplayUserMessage(seg.text, ++replayNum, seg.timestamp?.toString());
       continue;
     }
     // Historical bare IDs must not be linked to today's possibly different server.

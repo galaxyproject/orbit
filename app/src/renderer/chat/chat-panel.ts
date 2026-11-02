@@ -25,6 +25,15 @@ export type MessageRecord =
   | { role: "info"; text: string }
   | { role: "error"; text: string };
 
+/** A user message as drawn, for the host's hook. */
+export interface UserMessageDrawn {
+  text: string;
+  /** Redrawn from a resumed session rather than sent now. */
+  replayed: boolean;
+  /** The message's id, when the replay knows it (pi's timestamp). */
+  id?: string;
+}
+
 export class ChatPanel {
   private container: HTMLElement;
   private currentMessage: HTMLElement | null = null;
@@ -51,8 +60,7 @@ export class ChatPanel {
   // cards instead of all collapsing to one block pushed at message end.
   private pendingSegment = "";
   /** Called for every user message drawn, live or replayed; see setUserMessageHook. */
-  private userMessageHook: ((row: HTMLElement, text: string, replayed: boolean) => void) | null =
-    null;
+  private userMessageHook: ((row: HTMLElement, message: UserMessageDrawn) => void) | null = null;
   private copyBtn: HTMLElement;
 
   constructor(container: HTMLElement) {
@@ -133,7 +141,7 @@ export class ChatPanel {
   }
 
   addUserMessage(text: string): void {
-    this.drawUserMessage(text, ++this.promptCounter, false);
+    this.drawUserMessage(++this.promptCounter, { text, replayed: false });
   }
 
   /**
@@ -142,18 +150,19 @@ export class ChatPanel {
    * passes monotonically increasing numbers, so after the last call the
    * counter equals the replay's count. Live numbers continue from there.
    */
-  addReplayUserMessage(text: string, promptNum: number): void {
+  addReplayUserMessage(text: string, promptNum: number, id?: string): void {
     this.promptCounter = promptNum;
-    this.drawUserMessage(text, promptNum, true);
+    this.drawUserMessage(promptNum, { text, replayed: true, ...(id ? { id } : {}) });
   }
 
   /** Lets the host add to every user message as it is drawn, e.g. a line under the bubble. */
-  setUserMessageHook(hook: (row: HTMLElement, text: string, replayed: boolean) => void): void {
+  setUserMessageHook(hook: (row: HTMLElement, message: UserMessageDrawn) => void): void {
     this.userMessageHook = hook;
   }
 
   /** Draws one user message: its number, a connector, and the bubble, in one row. */
-  private drawUserMessage(text: string, n: number, replayed: boolean): void {
+  private drawUserMessage(n: number, message: UserMessageDrawn): void {
+    const { text } = message;
     this.history.push({ role: "user", text });
     this.resetErrorDedup();
     const turn = document.createElement("div");
@@ -176,7 +185,7 @@ export class ChatPanel {
     turn.appendChild(connector);
     turn.appendChild(bubble);
     this.container.appendChild(turn);
-    this.userMessageHook?.(turn, text, replayed);
+    this.userMessageHook?.(turn, message);
     this.scrollToBottom();
   }
 
