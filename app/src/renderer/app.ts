@@ -68,6 +68,7 @@ import { splitApprovalPrompt } from "../../../shared/approval-prompt.js";
 import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.js";
 import { createModalClaim } from "./ext-modal-claim.js";
 import { createOrbitNarration } from "./whats-happening-orbit.js";
+import { chatInlineHook } from "./whats-happening-chat.js";
 
 declare global {
   interface Window {
@@ -149,6 +150,7 @@ const whatsHappening = createOrbitNarration({
       contextWindow: knownContextWindowFor(currentProvider, currentModel),
     }).text,
 });
+chat.setUserMessageHook(chatInlineHook(whatsHappening));
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.

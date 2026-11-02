@@ -50,6 +50,9 @@ export class ChatPanel {
   // tool card). Flushed as its own record so prose keeps its order around tool
   // cards instead of all collapsing to one block pushed at message end.
   private pendingSegment = "";
+  /** Called for every user message drawn, live or replayed; see setUserMessageHook. */
+  private userMessageHook: ((row: HTMLElement, text: string, replayed: boolean) => void) | null =
+    null;
   private copyBtn: HTMLElement;
 
   constructor(container: HTMLElement) {
@@ -130,9 +133,29 @@ export class ChatPanel {
   }
 
   addUserMessage(text: string): void {
+    this.drawUserMessage(text, ++this.promptCounter, false);
+  }
+
+  /**
+   * Replay a historical user message with a fixed number (session history
+   * restore). The counter is set, not max'd — replay is authoritative and
+   * passes monotonically increasing numbers, so after the last call the
+   * counter equals the replay's count. Live numbers continue from there.
+   */
+  addReplayUserMessage(text: string, promptNum: number): void {
+    this.promptCounter = promptNum;
+    this.drawUserMessage(text, promptNum, true);
+  }
+
+  /** Lets the host add to every user message as it is drawn, e.g. a line under the bubble. */
+  setUserMessageHook(hook: (row: HTMLElement, text: string, replayed: boolean) => void): void {
+    this.userMessageHook = hook;
+  }
+
+  /** Draws one user message: its number, a connector, and the bubble, in one row. */
+  private drawUserMessage(text: string, n: number, replayed: boolean): void {
     this.history.push({ role: "user", text });
     this.resetErrorDedup();
-    const n = ++this.promptCounter;
     const turn = document.createElement("div");
     turn.className = "user-turn";
     turn.dataset.promptNum = String(n);
@@ -153,39 +176,7 @@ export class ChatPanel {
     turn.appendChild(connector);
     turn.appendChild(bubble);
     this.container.appendChild(turn);
-    this.scrollToBottom();
-  }
-
-  /**
-   * Replay a historical user message with a fixed number (session history
-   * restore). The counter is set, not max'd — replay is authoritative and
-   * passes monotonically increasing numbers, so after the last call the
-   * counter equals the replay's count. Live numbers continue from there.
-   */
-  addReplayUserMessage(text: string, promptNum: number): void {
-    this.history.push({ role: "user", text });
-    this.resetErrorDedup();
-    this.promptCounter = promptNum;
-    const turn = document.createElement("div");
-    turn.className = "user-turn";
-    turn.dataset.promptNum = String(promptNum);
-
-    const num = document.createElement("div");
-    num.className = "prompt-num";
-    num.textContent = String(promptNum);
-    num.title = `Prompt ${promptNum}`;
-
-    const connector = document.createElement("div");
-    connector.className = "prompt-connector";
-
-    const bubble = document.createElement("div");
-    bubble.className = "message user";
-    bubble.textContent = text;
-
-    turn.appendChild(num);
-    turn.appendChild(connector);
-    turn.appendChild(bubble);
-    this.container.appendChild(turn);
+    this.userMessageHook?.(turn, text, replayed);
     this.scrollToBottom();
   }
 

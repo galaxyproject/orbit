@@ -1251,6 +1251,15 @@ body.platform-darwin #files-title {
   user-select: none;
 }
 
+/* What's Happening's line under a user message: what Orbit did for it. */
+.wh-inline {
+  display: block;
+  margin: 6px 0 0 36px;
+  font-size: 12px;
+  color: var(--text-dim);
+  --wh-border: var(--border);
+}
+
 .prompt-connector {
   flex: 1;
   min-width: 8px;
