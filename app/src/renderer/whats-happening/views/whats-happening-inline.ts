@@ -1,7 +1,8 @@
 /**
  * `<whats-happening-inline>`: one user message's work on one line, for under
  * its chat bubble. The line says where the work stands; opening it shows the
- * message's card, the same card the list draws.
+ * inside of the message's card, as the list draws it, without the title and
+ * state the bubble and the line already show.
  *
  * It shows one card: the work the message started, with its follow-ups and
  * retries inside. In the rare case the message has more work besides, a quiet
@@ -13,7 +14,7 @@ import { css, html, nothing, type TemplateResult } from "lit";
 import { groupsForUserMessage } from "../core/narrator.js";
 import { rowsOf } from "../core/rows.js";
 import type { NarrationGroup } from "../core/types.js";
-import { card, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
+import { cardBody, cardStyles, hostOf, isFinished, summaryLine } from "./card.js";
 import { elapsed, NarrationView, nowText, partStyles, shorten, type DrawContext } from "./parts.js";
 
 export class WhatsHappeningInlineElement extends NarrationView {
@@ -72,7 +73,7 @@ export class WhatsHappeningInlineElement extends NarrationView {
           more > 0 ? html`<span class="more">+${more} more in Activity</span>` : nothing
         }
       </summary>
-      ${card(main, ctx, followUps)}
+      <section class="card">${cardBody(main, ctx, followUps)}</section>
     </details>`;
   }
 }

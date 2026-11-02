@@ -117,7 +117,7 @@ export function summaryLine(
 }
 
 /** Everything inside a card: its live line, waits, error, rows, checks and follow-ups. */
-function cardBody(
+export function cardBody(
   group: NarrationGroup,
   ctx: DrawContext,
   followUps: readonly NarrationGroup[],

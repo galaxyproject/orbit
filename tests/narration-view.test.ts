@@ -372,6 +372,8 @@ describe("<whats-happening-inline>", () => {
     const details = el.shadowRoot!.querySelector("details.inline") as HTMLDetailsElement;
     expect(details.open).toBe(false);
     expect(details.querySelector("section.card")).not.toBeNull();
+    // The bubble and the line already say what was asked and where it stands.
+    expect(details.querySelector("section.card header")).toBeNull();
 
     const waiting = play([
       ...asked("m1", "Trim", 0, "u1"),
