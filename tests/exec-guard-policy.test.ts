@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { decide } from "../extensions/orbit/exec-guard/policy";
+import { expandHome } from "../extensions/orbit/exec-guard/path-jail";
 import type {
   GuardianConfig,
   PathResolver,
@@ -992,6 +993,9 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     "cd ~/.aws && grep key credentials",
     "cd ~/.orbit && head -c 200 config.json",
     "cd ~/.loom && cat < config.json",
+    // #502's spelling
+    "cd ~ && cat .loom/config.json",
+    "cd ~ && cat .orbit/config.json",
   ])("denies a credential-store read: %j", (command) => {
     const r = run(command);
     expect(r.decision).toBe("deny");
@@ -1233,6 +1237,48 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     expect(r.decision).toBe("deny");
     expect(r.category).toBe("bash:catastrophic");
   });
+});
+
+// #502: shell spellings that read or clobber the brain config and state dirs.
+// Each is judged in an untrusted and a trusted workspace; trust lifts no floor.
+describe.each(WORKSPACE_STATE_DIR_NAMES)("decide -- #502 spellings, %s", (D) => {
+  const workspaces = { untrusted: baseCfg, trusted: { ...baseCfg, trustedWorkspaces: [CWD] } };
+  // The real resolver expands `~` and `$HOME` before it realpaths; this one only
+  // expands, so what is judged is exactly what the classifier hands over.
+  const expanding = {
+    resolver: {
+      contains: (p: string) => {
+        const resolved = expandHome(p, HOME);
+        return { resolved, inside: resolved.startsWith(CWD) };
+      },
+    },
+    home: HOME,
+  };
+
+  it.each([
+    `cat "$HOME"/${D}/config.json`,
+    `cat "\${HOME}"/${D}/config.json`,
+    `head -c 400 "$HOME"/${D}/config.json`,
+    `grep apiKey "$HOME"/${D}/config.json`,
+    `cat "$HOME"/${D}/config.json | base64`,
+    `cat ~/"${D}/config.json"`,
+    `cat ~/${D}/con\\fig.json`,
+    `\\cat ~/${D}/config.json`,
+    `c"a"t ~/${D}/config.json`,
+    `env cat "$HOME"/${D}/config.json`,
+    `LC_ALL=C grep apiKey ~/${D}/config.json`,
+    `{ cat ~/${D}/config.json; }`,
+    `if [ -f ~/${D}/config.json ]; then cat ~/${D}/config.json; fi`,
+  ])(
+    "a quoted, escaped or prefixed read of the config is the credential-store deny: %j",
+    (command) => {
+      for (const [workspace, config] of Object.entries(workspaces)) {
+        const r = decide(req({ config, toolInput: { command } }), expanding);
+        expect(r.decision, workspace).toBe("deny");
+        expect(r.category, workspace).toBe("read:credential-store");
+      }
+    },
+  );
 });
 
 describe("pi credential store (auth.json) is denied like ~/.loom/config.json", () => {

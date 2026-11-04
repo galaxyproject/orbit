@@ -329,3 +329,29 @@ describe.each([".loom", ".orbit"])("registerExecGuard -- symlinked %s state dir"
     expect(r?.block).toBe(true);
   });
 });
+
+// #502 through the real resolver, in a trusted workspace, where a command the
+// classifier doesn't recognize would run without asking.
+describe("registerExecGuard -- #502 spellings on the real resolver", () => {
+  beforeEach(() => {
+    fs.writeFileSync(
+      path.join(sandbox, ".loom", "config.json"),
+      JSON.stringify({
+        guardian: {
+          consentAcknowledged: { version: "1", at: "2026-01-01T00:00:00Z" },
+          trustedWorkspaces: [path.join(sandbox, "project")],
+        },
+      }),
+    );
+  });
+
+  it.each(['cat "$HOME"/.loom/config.json'])("blocks %j without prompting", async (command) => {
+    const c = ctx();
+    const r = await handler(
+      { type: "tool_call", toolName: "bash", toolCallId: "502", input: { command } },
+      c,
+    );
+    expect(r?.block).toBe(true);
+    expect(c.ui.select).not.toHaveBeenCalled();
+  });
+});

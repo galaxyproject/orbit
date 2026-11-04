@@ -719,3 +719,40 @@ describe("classifyBash -- the analysis record is a floor for the shell", () => {
     expect(classifyBash("echo x >> notebook.md").reason).toMatch(/edit\/write tools/);
   });
 });
+
+// #502: stripQuotes only trimmed a token's ends, so `"$HOME"/.loom/config.json`
+// reached the floor as `$HOME"/.loom/config.json`, which no resolver expands,
+// and a word in front of the reader hid the read altogether.
+describe("classifyBash -- a quoted, escaped or prefixed read (#502)", () => {
+  it.each([
+    [`cat "$HOME"/.orbit/config.json`, "$HOME/.orbit/config.json"],
+    [`cat "\${HOME}"/.orbit/config.json`, "${HOME}/.orbit/config.json"],
+    [`cat ~/".orbit/config.json"`, "~/.orbit/config.json"],
+    [`cat ~/.orbit/con\\fig.json`, "~/.orbit/config.json"],
+    [`\\cat ~/.orbit/config.json`, "~/.orbit/config.json"],
+    [`c"a"t ~/.orbit/config.json`, "~/.orbit/config.json"],
+  ])("hands the policy layer the operand as bash reads it: %j", (command, target) => {
+    expect(classifyBash(command).sensitiveReadPaths).toContain(target);
+  });
+
+  it("does the same for the workspace jail", () => {
+    expect(classifyBash(`ls "$HOME"/Desktop`).readPaths).toEqual(["$HOME/Desktop"]);
+  });
+
+  it("still splits a quoted pattern into operands, as before", () => {
+    expect(classifyBash("grep 'a .env' notes.txt").sensitiveReadPaths).toEqual([
+      "a",
+      ".env",
+      "notes.txt",
+    ]);
+  });
+
+  it.each([
+    "LC_ALL=C grep apiKey ~/.orbit/config.json",
+    "{ cat ~/.orbit/config.json; }",
+    "if true; then cat ~/.orbit/config.json; fi",
+    "! grep -q apiKey ~/.orbit/config.json",
+  ])("finds the reader behind an assignment or a keyword: %j", (command) => {
+    expect(classifyBash(command).sensitiveReadPaths).toContain("~/.orbit/config.json");
+  });
+});

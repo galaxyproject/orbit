@@ -1293,6 +1293,26 @@ const READ_LIKE = new Set(["cat", "head", "tail", "less", "more", "grep", "rg"])
 // so the jail's escape-ask is the right response, not the credential-store deny.
 const PATH_READING = new Set([...READ_LIKE, "ls", "find", "fd", "file", "stat", "du", "df", "wc"]);
 
+// bash's quote removal for one whitespace-split token. stripQuotes only trims
+// the ends, so `"$HOME"/.orbit/config.json` reached the floor as
+// `$HOME"/.orbit/config.json`, which the resolver can't expand -- a path
+// relative to the workspace, and a safe read. Through the word parser it is
+// `$HOME/.orbit/config.json`, the same as the unquoted spelling, and a quote or
+// backslash in the verb (`\cat`, `c"a"t`) no longer hides it. The split is
+// unchanged, so a quoted pattern with a space in it is still taken apart (see
+// the policy tests). Usually one word; none for a comment, and more where an
+// operator splits the token (`<(cat` is `cat`).
+function unquoted(token: string): string[] {
+  return shellWords(token).map(wordText);
+}
+
+// Words in front of a command's verb, which runSimple steps over too: an
+// assignment only sets the command's environment (`LC_ALL=C grep ...`), and a
+// keyword opens the compound command around it (`then cat ...`, `{ rm ...`).
+function isLeadingWord(word: string): boolean {
+  return LEADING_KEYWORDS.has(word) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(word);
+}
+
 // Content-read targets across EVERY shell segment (split on the same separators
 // as the catastrophic-rm scan). For any segment whose verb is a content reader,
 // collect its non-flag args. This is what closes the pipe evasion: `cat secret |
@@ -1302,7 +1322,10 @@ const PATH_READING = new Set([...READ_LIKE, "ls", "find", "fd", "file", "stat", 
 function extractReadTargets(command: string): string[] {
   const out: string[] = [];
   for (const segment of command.split(/[;&|\n\r]+/)) {
-    const tokens = unwrap(segment.trim().split(/\s+/).filter(Boolean).map(stripQuotes));
+    const words = segment.trim().split(/\s+/).filter(Boolean).flatMap(unquoted);
+    let k = 0;
+    while (k < words.length && isLeadingWord(words[k])) k++;
+    const tokens = unwrap(words.slice(k));
     if (tokens.length === 0) continue;
     const verb = tokens[0].split("/").pop(); // basename: /bin/cat -> cat
     if (!verb || !READ_LIKE.has(verb)) continue;
@@ -1390,13 +1413,14 @@ export function classifyBash(commandRaw: string, home = "", cwd = ""): BashClass
   // Collect path-like args for read/enumerate commands so the policy layer can
   // apply the workspace jail (a "safe" cat/ls/find must still not reach outside
   // the workspace silently). See PATH_READING for why the set is broader than
-  // READ_LIKE and which safe commands are deliberately left out. Quotes are
-  // stripped first (mirroring extractReadTargets): without it `ls "/external"`
-  // keeps its quotes, resolves as a cwd-relative path, and silently auto-allows.
+  // READ_LIKE and which safe commands are deliberately left out. Quotes come off
+  // first, the way the shell removes them (mirroring extractReadTargets):
+  // without it `ls "/external"` keeps its quotes, resolves as a cwd-relative
+  // path, and silently auto-allows.
   const readPaths = PATH_READING.has(cmd)
     ? tokens
         .slice(1)
-        .map(stripQuotes)
+        .flatMap(unquoted)
         .filter((t) => t.length > 0 && !t.startsWith("-"))
     : [];
   return {
