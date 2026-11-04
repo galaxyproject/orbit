@@ -582,6 +582,195 @@ export function scanRecordWrite(command: string): { targets: string[]; uncertain
   return { targets, uncertain };
 }
 
+// find's actions that delete, write a file or run a command, GNU's and BSD's.
+// find is on the read-only allowlist because it lists; with one of these it
+// doesn't only list.
+const FIND_WRITE_ACTIONS = new Set([
+  "-delete",
+  "-exec",
+  "-execdir",
+  "-ok",
+  "-okdir",
+  "-fls",
+  "-fprint",
+  "-fprint0",
+  "-fprintf",
+]);
+// The ones that write to the file named by the word after them.
+const FIND_FILE_ACTIONS = new Set(["-fls", "-fprint", "-fprint0", "-fprintf"]);
+// find's options, which come before its start points: -H, -L and -P, GNU's
+// -D (with its flags) and -O3, BSD's -E, -X, -d, -f (with a path), -s and -x,
+// alone or bundled, and `--`.
+const FIND_OPTION = /^-(?:-|O\d*|[DEHLPXdfsx]+)$/;
+
+/**
+ * What a find that deletes, writes or runs something acts on: its start points
+ * and the file an -fprint or -fls action writes to. Null when the find only
+ * lists. The rest of the expression says which files under the start points to
+ * act on and what to run -- `-not -path './.orbit/*'` leaves the env out rather
+ * than touching it, and in `-exec .orbit/env/bin/samtools index {} +` the env
+ * is the tool -- so a find rooted above a state dir (`find . -delete`) is not
+ * counted as a delete of it.
+ */
+function findWriteOperands(args: WordFragment[][]): WordFragment[][] | null {
+  const texts = args.map(wordText);
+  if (!texts.some((t) => FIND_WRITE_ACTIONS.has(t))) return null;
+  const own: WordFragment[][] = [];
+  let i = 0;
+  // The start points run, past find's options, to the first word of the
+  // expression. The word -D or -f takes is read as one: -f's is a start point,
+  // and -D's flags never name a state dir.
+  for (; i < texts.length; i++) {
+    if (FIND_OPTION.test(texts[i])) continue;
+    if (texts[i].startsWith("-") || texts[i] === "(" || texts[i] === "!") break;
+    own.push(args[i]);
+  }
+  for (; i < texts.length; i++) {
+    if (FIND_FILE_ACTIONS.has(texts[i]) && i + 1 < texts.length) own.push(args[++i]);
+  }
+  return own;
+}
+
+// Verbs that delete, empty or overwrite every operand they name. The record
+// floor counts them as writes too (ALL_ARGS_WRITE); the state-dir trigger never
+// knew them.
+const DELETE_VERBS = new Set(["rm", "unlink", "truncate", "shred"]);
+
+// A delete aimed at Orbit's own state, which the trigger in scanStateDirWrite
+// never looked for: `rm ~/.orbit/config.json` and `find .orbit -delete` went
+// through. Judged per segment, verb by verb, rather than added to the trigger:
+// the trigger makes every state-dir word on the line a target, and
+// `rm -f x.bam && conda run -p .orbit/env ...` would turn the env prefix into
+// one. Each target is resolved and carved out exactly as the trigger's are, so
+// a delete inside an analysis is the policy layer's to realpath and stays an
+// ordinary prompt.
+//
+// The line is read in both of shellTokens' views. The flat one splits on every
+// parenthesis, so it sees `((rm x) )`, which bash runs as nested subshells and
+// the structure one takes for arithmetic. The structure one keeps
+// `$(pwd)/.orbit` one word, which can't be resolved and so denies, and hands
+// over each command substitution -- quoted, backticked, in an assignment or a
+// redirection -- and each heredoc body, whoever reads it, to be judged the
+// same way.
+//
+// So is what an inner shell runs, read off the argv as runSimple reads it for
+// the cd tracker: the script after a shell's -c, wherever the shell sits
+// (`find -exec sh -c`, `xargs bash -c`), a here-string fed to it, and what
+// eval runs. Otherwise `bash -c 'rm ~/.orbit/config.json'` would get a milder
+// verdict than the same delete after a cd, which the tracker walks into, or a
+// cp over the file, which the trigger finds anywhere on the line.
+function scanStateDirDelete(
+  command: string,
+  home: string,
+): { catastrophic: boolean; targets: string[] } {
+  const targets = new Set<string>();
+  let catastrophic = false;
+  const judge = (w: WordFragment[]) => {
+    // A segment, not a substring: `rm sample.loom` deletes a single-cell
+    // matrix, not the state dir.
+    if (!hasStateSegment(wordText(w).replace(/\\/g, ""))) return;
+    const resolved = resolveStateDirWord(w, home);
+    if (resolved === null || isOrbitStatePath(resolved, home)) catastrophic = true;
+    // Both views see most words; one copy is enough.
+    else targets.add(resolved);
+  };
+  const scan = (script: string, depth: number) => {
+    // As deep as the cd tracker follows. Nothing honest nests further, so past
+    // that a state dir named anywhere is presumed deleted.
+    if (depth > 4) {
+      if (NAMES_STATE.test(script.replace(/\\/g, ""))) catastrophic = true;
+      return;
+    }
+    // Both views find most inner scripts as well; each is scanned once.
+    const inner = new Set<string>();
+    for (const structure of [false, true]) {
+      let segment: WordFragment[][] = [];
+      let hereStrings: string[] = [];
+      const flush = () => {
+        let k = 0;
+        while (k < segment.length && isLeadingWord(wordText(segment[k]))) k++;
+        const texts = segment.slice(k).map(wordText);
+        const argv = segment.slice(k + texts.length - unwrap(texts).length);
+        const fed = hereStrings;
+        segment = [];
+        hereStrings = [];
+        if (argv.length === 0) return;
+        const verb = wordText(argv[0]).split("/").pop() ?? "";
+        const args = argv.slice(1);
+        // A delete verb counts wherever it sits in the argv, the way the shell
+        // search below finds a shell: unwrap does not skip a wrapper's own
+        // options (env -i, timeout -s KILL 10), and xargs or find -exec can
+        // run rm with state paths as its operands.
+        if (!INERT_VERBS.has(verb)) {
+          argv.forEach((w, n) => {
+            if (DELETE_VERBS.has(wordText(w).split("/").pop() ?? "")) {
+              argv
+                .slice(n + 1)
+                .filter((a) => !wordText(a).startsWith("-"))
+                .forEach(judge);
+            }
+          });
+        }
+        if (verb === "find") findWriteOperands(args)?.forEach(judge);
+        // `echo bash -c '...'` only prints, so an inert verb's arguments are
+        // not searched. bash takes the first operand after its options as the
+        // script; `--` ends them.
+        const words = argv.map(wordText);
+        const shellAt = INERT_VERBS.has(verb)
+          ? -1
+          : words.findIndex((t) => SHELLS.has(t.split("/").pop() ?? ""));
+        if (shellAt !== -1) {
+          const c = words.findIndex((t, n) => n > shellAt && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t));
+          const body = c === -1 ? undefined : words.slice(c + 1).find((t) => !/^[-+]/.test(t));
+          if (body !== undefined) inner.add(body);
+          for (const h of fed) inner.add(h);
+        } else if (verb === "eval") {
+          inner.add(words.slice(1).join(" "));
+        }
+      };
+      const tokens = shellTokens(script, structure);
+      for (let i = 0; i < tokens.length; i++) {
+        const t = tokens[i];
+        if ("word" in t) {
+          segment.push(t.word);
+        } else if ("heredoc" in t) {
+          scan(t.heredoc, depth + 1);
+        } else {
+          // A joined run like `&&>` ends the command and then redirects; `&>`
+          // alone only redirects.
+          if (SEGMENT_OPS.has(t.op) || /^(?:[;|]|&(?!>))/.test(t.op)) flush();
+          if (/[<>]/.test(t.op)) {
+            // The fd in `2>&1` or `{fd}>log` is the redirection's: neither the
+            // verb nor an operand.
+            if (/^(?:\d+|\{[A-Za-z_]\w*\})$/.test(wordText(segment[segment.length - 1] ?? []))) {
+              segment.pop();
+            }
+            // A redirection's file is the trigger's to judge, not an operand of
+            // the verb. A here-string is kept for a shell that reads it as its
+            // script; one joined to a separator (`&&<<<`) is a here-string too.
+            const next = tokens[i + 1];
+            if (next && "word" in next) {
+              if (t.op.endsWith("<<<")) hereStrings.push(wordText(next.word));
+              i++;
+            }
+          }
+        }
+      }
+      flush();
+      // A command substitution runs wherever its word sits, a redirection's
+      // file included.
+      if (structure) {
+        for (const t of tokens) {
+          if ("word" in t) for (const body of substitutions(t.word)) scan(body, depth + 1);
+        }
+      }
+    }
+    for (const body of inner) scan(body, depth + 1);
+  };
+  scan(command, 0);
+  return { catastrophic, targets: [...targets] };
+}
+
 // The checks above judge each path as written, so `cd ~/.loom && echo x > a`
 // carried no `.loom/` after the write verb and sailed through. What follows
 // tracks the working directory across one command line -- `cd`, `pushd`,
@@ -1051,7 +1240,8 @@ function scanCdContext(command: string, hostHome: string, hostCwd: string): CdSc
     const writes = [...seg.outs];
     const inPlaceSed =
       verb === "sed" && argTexts.some((a) => a === "--in-place" || /^-[a-zA-Z]*i/.test(a));
-    if (verb === "tee" || verb === "cp" || verb === "mv" || inPlaceSed) {
+    const deletes = verb !== undefined && DELETE_VERBS.has(verb);
+    if (verb === "tee" || verb === "cp" || verb === "mv" || inPlaceSed || deletes) {
       args.forEach((w, k) => {
         if (!argTexts[k].startsWith("-")) writes.push(w);
       });
@@ -1061,6 +1251,8 @@ function scanCdContext(command: string, hostHome: string, hostCwd: string): CdSc
           writes.push([{ ...w[0], text: w[0].text.slice(3) }, ...w.slice(1)]);
         }
       }
+    } else if (verb === "find") {
+      writes.push(...(findWriteOperands(args) ?? []));
     }
     for (const w of writes) {
       const text = wordText(w);
@@ -1341,9 +1533,10 @@ export function classifyBash(commandRaw: string, home = "", cwd = ""): BashClass
   // sensitive-read floor fires through a pipe; see BashClass.sensitiveReadPaths.
   const sensitiveReadPaths = extractReadTargets(command);
   const stateDir = scanStateDirWrite(command, home);
+  const stateDelete = scanStateDirDelete(command, home);
   const base = {
     sensitiveReadPaths,
-    stateDirWriteTargets: [...stateDir.targets, ...cd.writeTargets],
+    stateDirWriteTargets: [...stateDir.targets, ...stateDelete.targets, ...cd.writeTargets],
     guardedCwd: cd.guarded,
     cdReadPaths: cd.readPaths,
     namesRecord: NAMES_RECORD.test(command.replace(/\\/g, "")),
@@ -1362,7 +1555,7 @@ export function classifyBash(commandRaw: string, home = "", cwd = ""): BashClass
       ...base,
     };
   }
-  if (stateDir.catastrophic || cd.catastrophic) {
+  if (stateDir.catastrophic || stateDelete.catastrophic || cd.catastrophic) {
     return {
       kind: "catastrophic",
       reason: "write to the Orbit config directory",
@@ -1423,6 +1616,23 @@ export function classifyBash(commandRaw: string, home = "", cwd = ""): BashClass
         .flatMap(unquoted)
         .filter((t) => t.length > 0 && !t.startsWith("-"))
     : [];
+  // A find that deletes, writes or runs something is not a read, whatever its
+  // place on the allowlist. It keeps its paths, so one outside the workspace
+  // still prompts as before; what it loses is the silent allow.
+  const action =
+    cmd === "find"
+      ? shellWords(command)
+          .map(wordText)
+          .find((t) => FIND_WRITE_ACTIONS.has(t))
+      : undefined;
+  if (action) {
+    return {
+      kind: "unknown",
+      reason: `'find ${action}' is not a read-only command`,
+      readPaths,
+      ...base,
+    };
+  }
   return {
     kind: "safe",
     reason: `read-only/analysis command '${cmd}'`,

@@ -1127,6 +1127,12 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     "pushd data && Rscript ../plot.R && popd",
     "(cd data && gzip -d *.gz) && ls data",
     "cd data && python3 ../scripts/run.py | tee run.log",
+    "cd data && rm -f *.tmp",
+    "cd data && find . -name '*.tmp' -delete",
+    "rm -rf tmp && mkdir tmp",
+    "find . -name '*.bam' -exec .loom/env/bin/samtools index {} \\;",
+    "find . -path ./.loom -prune -o -name '*.py' -exec grep -l foo {} \\;",
+    "cd data && find . -name '*.tmp' -not -path './.loom/*' -delete",
   ])("leaves ordinary analysis work alone: %j", (command) => {
     const analysis = `${HOME}/.loom/analyses/proj`;
     const inAnalysis: PathResolver = {
@@ -1279,6 +1285,51 @@ describe.each(WORKSPACE_STATE_DIR_NAMES)("decide -- #502 spellings, %s", (D) => 
       }
     },
   );
+
+  it.each([
+    `rm ~/${D}/config.json`,
+    `rm -rf ~/${D}`,
+    `unlink ~/${D}/config.json`,
+    `find ${D} -delete`,
+    `find ~/${D} -delete`,
+    `find ${D} -exec rm {} +`,
+    `cd ~/${D} && rm config.json`,
+    `cd ~/${D} && find . -delete`,
+    `cd ~ && rm -rf ${D}`,
+    `if [ -d ${D} ]; then rm -rf ${D}; fi`,
+    // in an inner shell, the direct path and its cd spelling alike
+    `bash -c 'rm ~/${D}/config.json'`,
+    `bash -c 'cd ~/${D} && rm config.json'`,
+  ])("a delete of Orbit state is denied, trusted workspace or not: %j", (command) => {
+    for (const [workspace, config] of Object.entries(workspaces)) {
+      const r = decide(req({ config, toolInput: { command } }), deps);
+      expect(r.decision, workspace).toBe("deny");
+      expect(r.category, workspace).toBe("bash:catastrophic");
+    }
+  });
+});
+
+// #502: a find that deletes is no longer a safe read, but it is not a floor
+// either. It gets an unknown command's prompt, and the jail still applies.
+describe("decide -- a find that deletes (#502)", () => {
+  const trusted = { ...baseCfg, trustedWorkspaces: [CWD] };
+
+  it("asks inside the workspace, and a trusted workspace allows it", () => {
+    const command = `find ${CWD}/tmp -delete`;
+    const r = decide(req({ toolInput: { command } }), deps);
+    expect(r.decision).toBe("ask");
+    expect(r.category).toBe("bash:unknown");
+    expect(decide(req({ config: trusted, toolInput: { command } }), deps).decision).toBe("allow");
+  });
+
+  it("still asks outside the workspace, even a trusted one", () => {
+    const r = decide(
+      req({ config: trusted, toolInput: { command: "find /test-home/alice/Desktop -delete" } }),
+      deps,
+    );
+    expect(r.decision).toBe("ask");
+    expect(r.category).toBe("read:escape");
+  });
 });
 
 describe("pi credential store (auth.json) is denied like ~/.loom/config.json", () => {

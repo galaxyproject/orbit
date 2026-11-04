@@ -345,7 +345,13 @@ describe("registerExecGuard -- #502 spellings on the real resolver", () => {
     );
   });
 
-  it.each(['cat "$HOME"/.loom/config.json'])("blocks %j without prompting", async (command) => {
+  it.each([
+    'cat "$HOME"/.loom/config.json',
+    "rm ~/.loom/config.json",
+    "find ~/.loom -delete",
+    'echo "$(rm ~/.loom/config.json)"',
+    "bash -c 'rm ~/.loom/config.json'",
+  ])("blocks %j without prompting", async (command) => {
     const c = ctx();
     const r = await handler(
       { type: "tool_call", toolName: "bash", toolCallId: "502", input: { command } },
