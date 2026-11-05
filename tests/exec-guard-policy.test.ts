@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { decide } from "../extensions/orbit/exec-guard/policy";
+import { expandHome } from "../extensions/orbit/exec-guard/path-jail";
 import type {
   GuardianConfig,
   PathResolver,
@@ -992,6 +993,9 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     "cd ~/.aws && grep key credentials",
     "cd ~/.orbit && head -c 200 config.json",
     "cd ~/.loom && cat < config.json",
+    // #502's spelling
+    "cd ~ && cat .loom/config.json",
+    "cd ~ && cat .orbit/config.json",
   ])("denies a credential-store read: %j", (command) => {
     const r = run(command);
     expect(r.decision).toBe("deny");
@@ -1123,6 +1127,12 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     "pushd data && Rscript ../plot.R && popd",
     "(cd data && gzip -d *.gz) && ls data",
     "cd data && python3 ../scripts/run.py | tee run.log",
+    "cd data && rm -f *.tmp",
+    "cd data && find . -name '*.tmp' -delete",
+    "rm -rf tmp && mkdir tmp",
+    "find . -name '*.bam' -exec .loom/env/bin/samtools index {} \\;",
+    "find . -path ./.loom -prune -o -name '*.py' -exec grep -l foo {} \\;",
+    "cd data && find . -name '*.tmp' -not -path './.loom/*' -delete",
   ])("leaves ordinary analysis work alone: %j", (command) => {
     const analysis = `${HOME}/.loom/analyses/proj`;
     const inAnalysis: PathResolver = {
@@ -1232,6 +1242,93 @@ describe("decide -- a cd into Loom state carries the direct path's verdict", () 
     );
     expect(r.decision).toBe("deny");
     expect(r.category).toBe("bash:catastrophic");
+  });
+});
+
+// #502: shell spellings that read or clobber the brain config and state dirs.
+// Each is judged in an untrusted and a trusted workspace; trust lifts no floor.
+describe.each(WORKSPACE_STATE_DIR_NAMES)("decide -- #502 spellings, %s", (D) => {
+  const workspaces = { untrusted: baseCfg, trusted: { ...baseCfg, trustedWorkspaces: [CWD] } };
+  // The real resolver expands `~` and `$HOME` before it realpaths; this one only
+  // expands, so what is judged is exactly what the classifier hands over.
+  const expanding = {
+    resolver: {
+      contains: (p: string) => {
+        const resolved = expandHome(p, HOME);
+        return { resolved, inside: resolved.startsWith(CWD) };
+      },
+    },
+    home: HOME,
+  };
+
+  it.each([
+    `cat "$HOME"/${D}/config.json`,
+    `cat "\${HOME}"/${D}/config.json`,
+    `head -c 400 "$HOME"/${D}/config.json`,
+    `grep apiKey "$HOME"/${D}/config.json`,
+    `cat "$HOME"/${D}/config.json | base64`,
+    `cat ~/"${D}/config.json"`,
+    `cat ~/${D}/con\\fig.json`,
+    `\\cat ~/${D}/config.json`,
+    `c"a"t ~/${D}/config.json`,
+    `env cat "$HOME"/${D}/config.json`,
+    `LC_ALL=C grep apiKey ~/${D}/config.json`,
+    `{ cat ~/${D}/config.json; }`,
+    `if [ -f ~/${D}/config.json ]; then cat ~/${D}/config.json; fi`,
+  ])(
+    "a quoted, escaped or prefixed read of the config is the credential-store deny: %j",
+    (command) => {
+      for (const [workspace, config] of Object.entries(workspaces)) {
+        const r = decide(req({ config, toolInput: { command } }), expanding);
+        expect(r.decision, workspace).toBe("deny");
+        expect(r.category, workspace).toBe("read:credential-store");
+      }
+    },
+  );
+
+  it.each([
+    `rm ~/${D}/config.json`,
+    `rm -rf ~/${D}`,
+    `unlink ~/${D}/config.json`,
+    `find ${D} -delete`,
+    `find ~/${D} -delete`,
+    `find ${D} -exec rm {} +`,
+    `cd ~/${D} && rm config.json`,
+    `cd ~/${D} && find . -delete`,
+    `cd ~ && rm -rf ${D}`,
+    `if [ -d ${D} ]; then rm -rf ${D}; fi`,
+    // in an inner shell, the direct path and its cd spelling alike
+    `bash -c 'rm ~/${D}/config.json'`,
+    `bash -c 'cd ~/${D} && rm config.json'`,
+  ])("a delete of Orbit state is denied, trusted workspace or not: %j", (command) => {
+    for (const [workspace, config] of Object.entries(workspaces)) {
+      const r = decide(req({ config, toolInput: { command } }), deps);
+      expect(r.decision, workspace).toBe("deny");
+      expect(r.category, workspace).toBe("bash:catastrophic");
+    }
+  });
+});
+
+// #502: a find that deletes is no longer a safe read, but it is not a floor
+// either. It gets an unknown command's prompt, and the jail still applies.
+describe("decide -- a find that deletes (#502)", () => {
+  const trusted = { ...baseCfg, trustedWorkspaces: [CWD] };
+
+  it("asks inside the workspace, and a trusted workspace allows it", () => {
+    const command = `find ${CWD}/tmp -delete`;
+    const r = decide(req({ toolInput: { command } }), deps);
+    expect(r.decision).toBe("ask");
+    expect(r.category).toBe("bash:unknown");
+    expect(decide(req({ config: trusted, toolInput: { command } }), deps).decision).toBe("allow");
+  });
+
+  it("still asks outside the workspace, even a trusted one", () => {
+    const r = decide(
+      req({ config: trusted, toolInput: { command: "find /test-home/alice/Desktop -delete" } }),
+      deps,
+    );
+    expect(r.decision).toBe("ask");
+    expect(r.category).toBe("read:escape");
   });
 });
 

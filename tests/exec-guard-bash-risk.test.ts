@@ -546,6 +546,9 @@ describe("classifyBash -- both state-dir spellings, whichever the workspace uses
   });
 
   it("recursive deletes of either state dir are judged the same", () => {
+    // A delete inside the analyses tree hands its target to the policy layer,
+    // spelled as the command spells it.
+    const asLoom = (p: string) => p.replace(/\.orbit(?=[\\/]|$)/g, ".loom");
     for (const [loom, orbit] of [
       ["rm -rf .loom", "rm -rf .orbit"],
       ["rm -rf .loom/env", "rm -rf .orbit/env"],
@@ -554,7 +557,7 @@ describe("classifyBash -- both state-dir spellings, whichever the workspace uses
     ]) {
       const a = classifyBash(loom, HOME);
       const b = classifyBash(orbit, HOME);
-      expect([b.kind, b.readPaths, b.stateDirWriteTargets], orbit).toEqual([
+      expect([b.kind, b.readPaths, b.stateDirWriteTargets.map(asLoom)], orbit).toEqual([
         a.kind,
         a.readPaths,
         a.stateDirWriteTargets,
@@ -717,5 +720,206 @@ describe("classifyBash -- the analysis record is a floor for the shell", () => {
 
   it("says what to do instead", () => {
     expect(classifyBash("echo x >> notebook.md").reason).toMatch(/edit\/write tools/);
+  });
+});
+
+// #502: stripQuotes only trimmed a token's ends, so `"$HOME"/.loom/config.json`
+// reached the floor as `$HOME"/.loom/config.json`, which no resolver expands,
+// and a word in front of the reader hid the read altogether.
+describe("classifyBash -- a quoted, escaped or prefixed read (#502)", () => {
+  it.each([
+    [`cat "$HOME"/.orbit/config.json`, "$HOME/.orbit/config.json"],
+    [`cat "\${HOME}"/.orbit/config.json`, "${HOME}/.orbit/config.json"],
+    [`cat ~/".orbit/config.json"`, "~/.orbit/config.json"],
+    [`cat ~/.orbit/con\\fig.json`, "~/.orbit/config.json"],
+    [`\\cat ~/.orbit/config.json`, "~/.orbit/config.json"],
+    [`c"a"t ~/.orbit/config.json`, "~/.orbit/config.json"],
+  ])("hands the policy layer the operand as bash reads it: %j", (command, target) => {
+    expect(classifyBash(command).sensitiveReadPaths).toContain(target);
+  });
+
+  it("does the same for the workspace jail", () => {
+    expect(classifyBash(`ls "$HOME"/Desktop`).readPaths).toEqual(["$HOME/Desktop"]);
+  });
+
+  it("still splits a quoted pattern into operands, as before", () => {
+    expect(classifyBash("grep 'a .env' notes.txt").sensitiveReadPaths).toEqual([
+      "a",
+      ".env",
+      "notes.txt",
+    ]);
+  });
+
+  it.each([
+    "LC_ALL=C grep apiKey ~/.orbit/config.json",
+    "{ cat ~/.orbit/config.json; }",
+    "if true; then cat ~/.orbit/config.json; fi",
+    "! grep -q apiKey ~/.orbit/config.json",
+  ])("finds the reader behind an assignment or a keyword: %j", (command) => {
+    expect(classifyBash(command).sensitiveReadPaths).toContain("~/.orbit/config.json");
+  });
+});
+
+// #502: find is on the allowlist because it lists, and -delete was dropped as
+// a flag, so wiping a state dir was a safe read even in an untrusted workspace.
+describe("classifyBash -- a find that deletes, writes or runs something (#502)", () => {
+  it.each([
+    ["find . -name '*.tmp' -delete", "-delete"],
+    ["find . -name '*.bam' -exec samtools index {} +", "-exec"],
+    ["find . -type d -execdir gzip {} +", "-execdir"],
+    ["find . -name '*.csv' -fprint list.txt", "-fprint"],
+    ["find . -fprint0 list.txt", "-fprint0"],
+    ["find . -fprintf list.txt '%p'", "-fprintf"],
+    ["find . -fls list.txt", "-fls"],
+    // with no file: find's error to report, not a crash here
+    ["find . -fprint", "-fprint"],
+    // quoting and escapes the shell removes
+    ["find . '-delete'", "-delete"],
+    ["find . -dele\\te", "-delete"],
+  ])("is not a read: %j", (command, action) => {
+    const r = classifyBash(command);
+    expect(r.kind).toBe("unknown");
+    expect(r.reason).toBe(`'find ${action}' is not a read-only command`);
+  });
+
+  it("keeps its paths, so the workspace jail still sees them", () => {
+    expect(classifyBash("find /home/alice/Desktop -delete").readPaths).toContain(
+      "/home/alice/Desktop",
+    );
+  });
+
+  it.each(["find . -name '*.csv'", "find data -type f -newer x.csv", "find . -name '*-delete*'"])(
+    "is still a safe read when it only lists: %j",
+    (command) => {
+      expect(classifyBash(command).kind).toBe("safe");
+    },
+  );
+});
+
+// #502: the state-dir trigger only knew the copy and redirect forms, so a
+// delete of Orbit's own state was an unknown command, auto-allowed for a
+// trusted model in a trusted workspace.
+describe.each(WORKSPACE_STATE_DIR_NAMES)("classifyBash -- deleting %s state (#502)", (D) => {
+  const ANALYSIS = `${HOME}/${D}/analyses/proj`;
+
+  it.each([
+    `rm ~/${D}/config.json`,
+    `rm -f "$HOME"/${D}/config.json`,
+    `rm ${HOME}/${D}/config.json`,
+    `rm -rf ~/${D}`,
+    `rm -rf ~/${D}/lessons`,
+    `rm -rf ${D}`,
+    `rm ${D}/state/registry.json`,
+    `rm -rf ${ANALYSIS}/${D}`,
+    `unlink ~/${D}/config.json`,
+    `truncate -s 0 ~/${D}/config.json`,
+    `shred -u ~/${D}/config.json`,
+    `env rm ~/${D}/config.json`,
+    `X=1 rm ~/${D}/config.json`,
+    `ls; rm ~/${D}/config.json`,
+    `{ rm -rf ~/${D}; }`,
+    `if [ -e ~/${D}/config.json ]; then rm ~/${D}/config.json; fi`,
+    `find ${D} -delete`,
+    `find ./${D}/state -delete`,
+    `find ~/${D} -name '*.json' -delete`,
+    `find ${D} -exec rm {} +`,
+    `find ${D} -ok rm {} \\;`,
+    `find ${D} -okdir rm {} \\;`,
+    `find . -fprint ~/${D}/config.json`,
+    `find . -fprint0 ~/${D}/config.json`,
+    `find . -fprintf ~/${D}/config.json '%p'`,
+    `find . -fls ~/${D}/config.json`,
+    // find's options come before its start points: both finds', GNU's, BSD's
+    `find -L ${D} -delete`,
+    `find -H -P ${D} -delete`,
+    `find -D tree -O3 -- ${D} -delete`,
+    `find -EXdsx -f ${D} -delete`,
+    // a newline, or a path to the verb
+    `ls\nrm ~/${D}/config.json`,
+    `ls\nfind ${D} -delete`,
+    `/bin/rm ~/${D}/config.json`,
+    // a redirection in front of the verb, with its fd or joined to a separator
+    `2>&1 rm -rf ~/${D}`,
+    `2>/dev/null find ~/${D} -delete`,
+    `{fd}>/dev/null rm -rf ~/${D}`,
+    `true&&>/dev/null rm -rf ~/${D}`,
+    `rm &>/dev/null -rf ~/${D}`,
+    // in a command substitution, or with one in the path
+    `echo "$(rm ~/${D}/config.json)"`,
+    `echo \`rm ~/${D}/config.json\``,
+    `X="$(rm -rf ~/${D})"`,
+    `cat <<EOF\n"$(rm ~/${D}/config.json)"\nEOF`,
+    `rm -rf $(pwd)/${D}`,
+    `find $(pwd)/${D} -delete`,
+    // nested subshells, which the structure view takes for arithmetic
+    `((rm -rf ~/${D}) )`,
+    // what an inner shell or eval runs, which the cd tracker walks too
+    `bash -c 'rm ~/${D}/config.json'`,
+    `bash -lc 'rm ~/${D}/config.json'`,
+    `sh -c "find ~/${D} -delete"`,
+    `bash -c -- 'rm -rf ~/${D}'`,
+    `eval 'rm ~/${D}/config.json'`,
+    `eval rm ~/${D}/config.json`,
+    `bash <<< 'rm -rf ~/${D}'`,
+    `true&&<<<'rm -rf ~/${D}' bash`,
+    `find . -exec sh -c 'rm ~/${D}/config.json' \\;`,
+    `echo x | xargs sh -c 'rm ~/${D}/config.json'`,
+    // a delete verb behind a wrapper's own options, or run by xargs or find -exec
+    `env -i rm ~/${D}/config.json`,
+    `timeout -s KILL 10 rm -rf ~/${D}`,
+    `xargs rm ~/${D}/config.json </dev/null`,
+    `find . -maxdepth 0 -exec rm ~/${D}/config.json \\;`,
+    // nested deeper than the scan follows, where even an analysis is presumed state
+    `echo "$(echo "$(echo "$(echo "$(echo \`rm ~/${D}/analyses/proj/x\`)")")")"`,
+  ])("is catastrophic: %j", (command) => {
+    const r = classifyBash(command, HOME);
+    expect(r.kind).toBe("catastrophic");
+    expect(r.reason).toBe("write to the Orbit config directory");
+  });
+
+  it.each([
+    [`rm ${ANALYSIS}/old.txt`, `${ANALYSIS}/old.txt`],
+    [`rm -rf ~/${D}/analyses/proj/tmp`, `${ANALYSIS}/tmp`],
+    [`find ${ANALYSIS} -name '*.tmp' -delete`, ANALYSIS],
+    [`bash -c 'rm -rf ~/${D}/analyses/proj/tmp'`, `${ANALYSIS}/tmp`],
+    [`eval rm -rf ~/${D}/analyses/proj/tmp`, `${ANALYSIS}/tmp`],
+    // as deep as the scan follows
+    [`echo "$(echo "$(echo "$(echo \`rm ~/${D}/analyses/proj/x\`)")")"`, `${ANALYSIS}/x`],
+  ])(
+    "hands a delete inside the analysis to the policy layer to realpath: %j",
+    (command, target) => {
+      const r = classifyBash(command, HOME);
+      expect(r.kind).toBe("unknown");
+      expect(r.stateDirWriteTargets).toEqual([path.normalize(target)]);
+    },
+  );
+
+  it.each([
+    // the env is the tool here, not a target
+    `rm -f x.bam && conda run -p ${D}/env samtools index y.bam`,
+    `bash -c 'rm -f x.bam && conda run -p ${D}/env samtools index y.bam'`,
+    `conda run -p ${D}/env bash -c 'rm -rf tmp'`,
+    `find . -name '*.bam' -exec ${D}/env/bin/samtools index {} +`,
+    `find . -type f -execdir ${D}/env/bin/samtools index {} +`,
+    // the rest of a find's expression only picks files: an exclusion, a
+    // reference file
+    `find . -path ./${D} -prune -o -name '*.py' -exec grep -l foo {} +`,
+    `find . -name '*.csv' -not -path './${D}/*' -exec wc -l {} +`,
+    `find . -name '*.tmp' -not -path './${D}/*' -delete`,
+    `find . -newer ~/${D}/config.json -name '*.csv' -exec wc -l {} +`,
+    // .loom is also a single-cell file format
+    "rm -rf build sample.loom",
+    // conda manages its own env, and conda is not a delete verb
+    `conda env remove -p ${D}/env -y`,
+    // a here-string goes to its own command, and cat only prints it
+    `cat <<< 'rm -rf ~/${D}'; bash run.sh`,
+    // nested as deep, naming no state dir
+    'echo "$(echo "$(echo "$(echo "$(echo `rm x`)")")")"',
+  ])("stays an ordinary unknown command: %j", (command) => {
+    expect(classifyBash(command, HOME).kind).toBe("unknown");
+  });
+
+  it("leaves alone a shell that an inert verb only prints", () => {
+    expect(classifyBash(`echo bash -c 'rm -rf ~/${D}'`, HOME).kind).toBe("safe");
   });
 });
