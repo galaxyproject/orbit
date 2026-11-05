@@ -492,8 +492,12 @@ const NAMES_RECORD = new RegExp(
   "i",
 );
 const SEGMENT_OPS = new Set([";", "&&", "||", "|", "&", "(", ")", "\n", "|&", ";;"]);
+// Verbs that delete, empty or overwrite every operand they name. The record
+// floor counts them as writes (ALL_ARGS_WRITE), and so do the state-dir delete
+// scan and the cd tracker.
+const DELETE_VERBS = new Set(["rm", "unlink", "truncate", "shred"]);
 // Every argument is a write target (the source of a `mv` is removed).
-const ALL_ARGS_WRITE = new Set(["tee", "mv", "rm", "unlink", "truncate", "shred"]);
+const ALL_ARGS_WRITE = new Set(["tee", "mv", ...DELETE_VERBS]);
 // Only the last argument is (`cp notebook.md backup.md` reads the notebook).
 const LAST_ARG_WRITE = new Set(["cp", "install", "ln", "rsync"]);
 
@@ -631,11 +635,6 @@ function findWriteOperands(args: WordFragment[][]): WordFragment[][] | null {
   return own;
 }
 
-// Verbs that delete, empty or overwrite every operand they name. The record
-// floor counts them as writes too (ALL_ARGS_WRITE); the state-dir trigger never
-// knew them.
-const DELETE_VERBS = new Set(["rm", "unlink", "truncate", "shred"]);
-
 // A delete aimed at Orbit's own state, which the trigger in scanStateDirWrite
 // never looked for: `rm ~/.orbit/config.json` and `find .orbit -delete` went
 // through. Judged per segment, verb by verb, rather than added to the trigger:
@@ -653,12 +652,13 @@ const DELETE_VERBS = new Set(["rm", "unlink", "truncate", "shred"]);
 // redirection -- and each heredoc body, whoever reads it, to be judged the
 // same way.
 //
-// So is what an inner shell runs, read off the argv as runSimple reads it for
-// the cd tracker: the script after a shell's -c, wherever the shell sits
-// (`find -exec sh -c`, `xargs bash -c`), a here-string fed to it, and what
-// eval runs. Otherwise `bash -c 'rm ~/.orbit/config.json'` would get a milder
-// verdict than the same delete after a cd, which the tracker walks into, or a
-// cp over the file, which the trigger finds anywhere on the line.
+// So is what an inner shell runs, read off the argv by the helpers the cd
+// tracker uses (commandArgv, innerScripts): the script after a shell's -c,
+// wherever the shell sits (`find -exec sh -c`, `xargs bash -c`), a here-string
+// fed to it, and what eval runs. Otherwise `bash -c 'rm ~/.orbit/config.json'`
+// would get a milder verdict than the same delete after a cd, which the tracker
+// walks into, or a cp over the file, which the trigger finds anywhere on the
+// line.
 function scanStateDirDelete(
   command: string,
   home: string,
@@ -677,7 +677,7 @@ function scanStateDirDelete(
   const scan = (script: string, depth: number) => {
     // As deep as the cd tracker follows. Nothing honest nests further, so past
     // that a state dir named anywhere is presumed deleted.
-    if (depth > 4) {
+    if (depth > MAX_NESTING) {
       if (NAMES_STATE.test(script.replace(/\\/g, ""))) catastrophic = true;
       return;
     }
@@ -687,10 +687,7 @@ function scanStateDirDelete(
       let segment: WordFragment[][] = [];
       let hereStrings: string[] = [];
       const flush = () => {
-        let k = 0;
-        while (k < segment.length && isLeadingWord(wordText(segment[k]))) k++;
-        const texts = segment.slice(k).map(wordText);
-        const argv = segment.slice(k + texts.length - unwrap(texts).length);
+        const { argv } = commandArgv(segment);
         const fed = hereStrings;
         segment = [];
         hereStrings = [];
@@ -712,21 +709,7 @@ function scanStateDirDelete(
           });
         }
         if (verb === "find") findWriteOperands(args)?.forEach(judge);
-        // `echo bash -c '...'` only prints, so an inert verb's arguments are
-        // not searched. bash takes the first operand after its options as the
-        // script; `--` ends them.
-        const words = argv.map(wordText);
-        const shellAt = INERT_VERBS.has(verb)
-          ? -1
-          : words.findIndex((t) => SHELLS.has(t.split("/").pop() ?? ""));
-        if (shellAt !== -1) {
-          const c = words.findIndex((t, n) => n > shellAt && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t));
-          const body = c === -1 ? undefined : words.slice(c + 1).find((t) => !/^[-+]/.test(t));
-          if (body !== undefined) inner.add(body);
-          for (const h of fed) inner.add(h);
-        } else if (verb === "eval") {
-          inner.add(words.slice(1).join(" "));
-        }
+        for (const body of innerScripts(argv.map(wordText), fed).scripts) inner.add(body);
       };
       const tokens = shellTokens(script, structure);
       for (let i = 0; i < tokens.length; i++) {
@@ -879,6 +862,9 @@ const ANALYSES_TREE = new RegExp(
   "gi",
 );
 
+// How deep the cd tracker and the state-dir delete scan follow inner scripts
+// (a shell's -c, eval, a substitution, a heredoc). Nothing honest nests further.
+const MAX_NESTING = 4;
 // More candidate directories than this and the tracker stops telling them
 // apart; the cost of judging each one grows with every cd that might fail.
 const MAX_CANDIDATES = 8;
@@ -954,6 +940,42 @@ function substitutions(word: WordFragment[]): string[] {
     }
   }
   return out;
+}
+
+// A simple command's argv: past the words in front of its verb (isLeadingWord)
+// and the wrappers unwrap peels (`env -i`, `nice`, `conda run -p ...`). `lead`
+// counts the leading words, whose assignments runSimple still reads.
+function commandArgv(words: WordFragment[][]): { lead: number; argv: WordFragment[][] } {
+  let lead = 0;
+  while (lead < words.length && isLeadingWord(wordText(words[lead]))) lead++;
+  const texts = words.slice(lead).map(wordText);
+  return { lead, argv: words.slice(lead + texts.length - unwrap(texts).length) };
+}
+
+// What a simple command runs as shell code of its own, read off its argv: the
+// script after a shell's -c, wherever the shell sits in the argv
+// (`find -exec sh -c`, `xargs bash -c`, `nice sh -c`), then each here-string fed
+// to that shell; or the line `eval` runs. `runner` says which, so the cd tracker
+// can walk an inner shell from a copy of where it stands and eval in place.
+function innerScripts(
+  argv: string[],
+  hereStrings: string[],
+): { runner: "shell" | "eval" | null; scripts: string[] } {
+  const verb = argv.length ? (argv[0].split("/").pop() ?? "") : "";
+  // `echo bash -c '...'` only prints, so an inert verb's arguments are not searched.
+  if (argv.length === 0 || INERT_VERBS.has(verb)) return { runner: null, scripts: [] };
+  const shellAt = argv.findIndex((t) => SHELLS.has(t.split("/").pop() ?? ""));
+  if (shellAt !== -1) {
+    const c = argv.findIndex((t, k) => k > shellAt && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t));
+    // bash takes the first operand after its options as the script; `--` ends them.
+    const script = c === -1 ? undefined : argv.slice(c + 1).find((t) => !/^[-+]/.test(t));
+    return {
+      runner: "shell",
+      scripts: script === undefined ? hereStrings : [script, ...hereStrings],
+    };
+  }
+  if (verb === "eval") return { runner: "eval", scripts: [argv.slice(1).join(" ")] };
+  return { runner: null, scripts: [] };
 }
 
 function sameState(a: CwdState, b: CwdState): boolean {
@@ -1044,7 +1066,7 @@ function scanCdContext(command: string, hostHome: string, hostCwd: string): CdSc
   return out;
 
   function walk(script: string, sh: Shell, depth: number): Shell {
-    if (depth > 4) {
+    if (depth > MAX_NESTING) {
       // Nested deeper than any honest command: refuse to judge it as harmless.
       out.guarded = true;
       if (sh.cur.some((d) => d.nearState)) out.catastrophic = true;
@@ -1153,20 +1175,14 @@ function scanCdContext(command: string, hostHome: string, hostCwd: string): CdSc
     // Command substitutions run in a subshell that starts where this command stands.
     for (const w of all) for (const inner of substitutions(w)) walk(inner, copy(sh), depth + 1);
 
-    let i = 0;
-    while (i < seg.words.length) {
-      const t = wordText(seg.words[i]);
-      if (LEADING_KEYWORDS.has(t)) i++;
-      else if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) {
-        if (CD_STEERING.test(t)) sh = { ...sh, steered: true };
-        sh = setOldpwd(seg.words[i], sh);
-        i++;
-      } else break;
+    const { lead, argv } = commandArgv(seg.words);
+    for (const w of seg.words.slice(0, lead)) {
+      const t = wordText(w);
+      if (LEADING_KEYWORDS.has(t)) continue;
+      // An assignment in front of the verb.
+      if (CD_STEERING.test(t)) sh = { ...sh, steered: true };
+      sh = setOldpwd(w, sh);
     }
-    const rest = seg.words.slice(i);
-    const texts = rest.map(wordText);
-    const offset = texts.length - unwrap(texts).length;
-    const argv = rest.slice(offset);
     const args = argv.slice(1);
     const argTexts = args.map(wordText);
     const verb = argv.length ? wordText(argv[0]).split("/").pop() : undefined;
@@ -1186,27 +1202,16 @@ function scanCdContext(command: string, hostHome: string, hostCwd: string): CdSc
 
     if (sh.moved) for (const where of sh.cur) judgeOperands(where, verb, args, argTexts, seg);
 
-    // An inner shell starts where this one stands, wherever it sits in the argv
-    // (`find -exec sh -c`, `xargs bash -c`, `nice sh -c`); `eval` runs in this one.
+    // An inner shell starts where this one stands; `eval` runs in this one.
     const texts2 = argv.map(wordText);
     const inert = verb !== undefined && INERT_VERBS.has(verb);
     if (!inert) backstop(texts2.slice(1).join(" "));
-    // `echo bash -c '...'` only prints, so an inert verb's arguments are not searched.
-    const shellAt = inert ? -1 : texts2.findIndex((t) => SHELLS.has(t.split("/").pop() ?? ""));
-    let shell = false;
-    if (shellAt !== -1) {
-      shell = true;
-      const c = texts2.findIndex((t, k) => k > shellAt && /^-[a-zA-Z]*c[a-zA-Z]*$/.test(t));
-      if (c !== -1) {
-        // bash takes the first operand after its options as the script; `--` ends them.
-        const script = texts2.slice(c + 1).find((t) => !/^[-+]/.test(t));
-        if (script !== undefined) walk(script, copy(sh), depth + 1);
-      }
-      for (const w of seg.hereStrings) walk(wordText(w), copy(sh), depth + 1);
-    } else if (verb === "eval") {
-      return { sh: walk(argTexts.join(" "), sh, depth + 1), cd: false, shell, inert };
+    const runs = innerScripts(texts2, seg.hereStrings.map(wordText));
+    if (runs.runner === "eval") {
+      return { sh: walk(runs.scripts[0], sh, depth + 1), cd: false, shell: false, inert };
     }
-    return { sh, cd: false, shell, inert };
+    for (const script of runs.scripts) walk(script, copy(sh), depth + 1);
+    return { sh, cd: false, shell: runs.runner === "shell", inert };
   }
 
   function judgeOperands(
