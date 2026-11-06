@@ -15,14 +15,19 @@ export interface UiRequest {
 export interface ReplayTool {
   id: string;
   name: string;
+  arguments?: unknown;
   resultText?: string;
   isError?: boolean;
+  startedAt?: number;
+  endedAt?: number;
 }
 
 export interface ReplaySegment {
   role: "user" | "assistant";
   text: string;
   tools?: ReplayTool[];
+  /** pi's timestamp for the message; for a user message, its id. */
+  timestamp?: number;
 }
 
 export interface ProcInfo {
