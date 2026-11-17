@@ -1,0 +1,30 @@
+{
+  "name": "@galaxyproject/gtn-mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server for the Galaxy Training Network: find tutorials and the workflows they ship.",
+  "keywords": [
+    "galaxy",
+    "gtn",
+    "bioinformatics",
+    "mcp",
+    "training"
+  ],
+  "author": "Galaxy Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/galaxyproject/orbit",
+    "directory": "packages/gtn-mcp"
+  },
+  "engines": {
+    "node": ">=22.19"
+  },
+  "files": [
+    "bin/",
+    "lib/"
+  ],
+  "bin": {
+    "gtn-mcp": "./bin/gtn-mcp.js"
+  }
+}
