@@ -518,10 +518,13 @@ describe("Orbit on pi-host", () => {
       // check adds three (session_start, input, agent_end). The history guard's owner lookup
       // forgets the signed-in user on session_start.
       on: 71 + 7 + 1 + 2 + 3 + 1,
-      // Orbit's own tools; the Galaxy family (the browser entry's 42 operations, the shell's three
-      // extras, and Orbit's list_jobs and get_job_logs bridges); galaxy_read_output beside it; and
-      // the probe. mcp_read_output is MCP-only.
-      tools: 15 + 47 + 1 + 1,
+      // Orbit's own tools; the six GTN index tools (gtn_find_tutorial, gtn_find_workflow,
+      // gtn_get_workflow, gtn_tutorials_for_tool, gtn_servers_for_tool, gtn_learning_path --
+      // gtn_search and gtn_fetch are counted in the 15, being older than the index); the Galaxy
+      // family (the browser entry's 42 operations, the shell's three extras, and Orbit's list_jobs
+      // and get_job_logs bridges); galaxy_read_output beside it; and the probe. mcp_read_output is
+      // MCP-only.
+      tools: 15 + 6 + 47 + 1 + 1,
       // The real /reconcile, in the stub's place.
       commands: 21,
     });

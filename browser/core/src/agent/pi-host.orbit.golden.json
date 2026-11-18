@@ -70,6 +70,7 @@
     "shared/custom-provider.js -> node:fs",
     "shared/dashboard-layout-store.js -> node:fs",
     "shared/dashboard-layout-store.js -> node:fs/promises",
+    "shared/gtn-index-cache.js -> node:fs",
     "shared/known-provider.js -> node:fs",
     "shared/orbit-config.js -> node:fs",
     "shared/state-dir.js -> node:fs"
