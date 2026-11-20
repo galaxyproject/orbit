@@ -67,6 +67,11 @@ import type { ProviderAuthCaps } from "../../../shared/provider-auth-caps.js";
 import { splitApprovalPrompt } from "../../../shared/approval-prompt.js";
 import { openReleaseWithFallback, clearReleaseFallback } from "./update-banner.js";
 import { createModalClaim } from "./ext-modal-claim.js";
+import { galaxyArtifactUrl } from "../../../shared/galaxy-artifact-links.js";
+import { createOrbitNarration } from "./whats-happening-orbit.js";
+import { createChatLines } from "./whats-happening-chat.js";
+import { mountWhatsHappeningList } from "./whats-happening-activity.js";
+import type { GalaxyLinkBuilder } from "./whats-happening/views/parts.js";
 
 declare global {
   interface Window {
@@ -140,6 +145,36 @@ const modelIndicatorNameEl = document.getElementById("model-indicator-name")!;
 
 const chat = new ChatPanel(messagesEl);
 const artifacts = new ArtifactPanel();
+// What's Happening: what Orbit is doing in Galaxy, narrated from its events.
+const whatsHappening = createOrbitNarration({
+  readFile: (path, opts) => window.orbit.readFile(path, opts),
+  describeModelError: (message) =>
+    humanizeAgentError(message, {
+      contextWindow: knownContextWindowFor(currentProvider, currentModel),
+    }).text,
+});
+// Links into Galaxy, on the server the chat links to (set in refreshGalaxyStatus).
+// The browser shell has no Galaxy status, so there it draws names without links.
+let whatsHappeningServer: string | null = null;
+const whatsHappeningLink: GalaxyLinkBuilder = (ref) =>
+  galaxyArtifactUrl(whatsHappeningServer, ref.kind, ref.id) ?? undefined;
+const whatsHappeningChat = createChatLines(
+  whatsHappening,
+  document.getElementById("whats-happening-dock")!,
+  whatsHappeningLink,
+  // "N more running" above the input opens the full list in Activity.
+  () => {
+    artifacts.selectTab("activity");
+    artifacts.selectActivityView("whats-happening");
+  },
+);
+chat.setUserMessageHook(whatsHappeningChat.hook);
+mountWhatsHappeningList(
+  artifacts.getWhatsHappeningContainer(),
+  whatsHappening,
+  whatsHappeningLink,
+  whatsHappeningChat,
+);
 // Guarded, and every use below is optional: this runs during module evaluation,
 // ahead of the chat, files, Galaxy and IPC wiring, so an exception here would
 // replace the whole window with a blank page rather than one broken tab.
@@ -768,6 +803,7 @@ async function refreshGalaxyStatus(): Promise<void> {
   // A newer refresh started while we awaited -- let it win.
   if (seq !== galaxyStatusSeq) return;
   chat.setGalaxyServerUrl(connected ? url : null);
+  whatsHappeningServer = connected ? url : null;
 
   if (connected && url) {
     galaxyStatus.classList.add("status-dot-connected");
@@ -1690,6 +1726,7 @@ function resetUiForFreshContext(opts: { clearPersistedCost?: boolean } = {}): vo
   notebookLoadSeq++;
   chat.clear();
   artifacts.clear();
+  whatsHappening.reset();
   clearQueue();
   sessionUsage.input = 0;
   sessionUsage.output = 0;
@@ -1797,10 +1834,11 @@ window.orbit.onSessionHistory((history) => {
   if (history.length === 0) return;
   if (chat.hasContent()) return;
   chat.addInfoMessage("<i>— Resumed previous session —</i>");
+  void whatsHappening.restore(history);
   let replayNum = 0;
   for (const seg of history) {
     if (seg.role === "user") {
-      chat.addReplayUserMessage(seg.text, ++replayNum);
+      chat.addReplayUserMessage(seg.text, ++replayNum, seg.timestamp?.toString());
       continue;
     }
     // Historical bare IDs must not be linked to today's possibly different server.
@@ -2014,6 +2052,7 @@ function submit(): void {
 
 function dispatchSubmittedText(text: string): void {
   handledPromptPending = false;
+  whatsHappening.onUserText(text);
   // Slash commands handled locally may run without an LLM round-trip. Commands
   // that do call the agent run here only after the current turn is idle.
   if (text.startsWith("/") && handleSlashCommand(text)) return;
@@ -2865,6 +2904,7 @@ window.orbit.onAgentEvent((event) => {
 
   // Feed the agent shell with interesting events
   feedShell(event);
+  whatsHappening.onAgentEvent(event);
 
   switch (type) {
     case "response":
@@ -3269,6 +3309,7 @@ window.orbit.onUiRequest((request) => {
   if (method === "notify") {
     const message = (request as Record<string, unknown>).message as string | undefined;
     const notifyType = (request as Record<string, unknown>).notifyType as string | undefined;
+    whatsHappening.onNotify(message);
     if (message) {
       const escaped = message.replace(/</g, "&lt;");
       // Preserve newlines + indentation for multi-line status/profile dumps.
