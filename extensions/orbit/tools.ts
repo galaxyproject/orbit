@@ -60,7 +60,18 @@ import {
   isReservedRepo,
   readBundledRepoFile,
 } from "./vendor-skills";
+import path from "node:path";
 import { GTN_API, gtnPageText, gtnTopics, gtnTutorials, gtnUrl } from "../../shared/gtn.js";
+import {
+  gtnFindTutorials,
+  gtnFindWorkflows,
+  gtnGetWorkflow,
+  gtnLearningPath,
+  gtnServersForTool,
+  gtnTutorialsForTool,
+} from "../../shared/gtn-index.js";
+import { loadGtnIndex } from "../../shared/gtn-index-cache.js";
+import { resolveStateDir } from "../../shared/state-dir.js";
 import type { GalaxyToolFamily } from "../../shared/galaxy-tool-family.js";
 
 /**
@@ -89,6 +100,11 @@ function requireLabel(label: string): string {
  */
 function stripGtnHtml(html: string): string {
   return gtnPageText(html);
+}
+
+/** Orbit keeps the GTN index beside its other caches: `<state dir>/cache/gtn/index.json`. */
+function gtnIndexFile(): string {
+  return path.join(resolveStateDir(), "cache", "gtn", "index.json");
 }
 
 /**
@@ -282,6 +298,434 @@ analyses in Galaxy.`,
         return new Text("❌ GTN fetch failed");
       }
       return new Text(`📖 Fetched GTN tutorial (${d?.length || 0} chars)`);
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: Find a tutorial anywhere in GTN
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_find_tutorial",
+    label: "Find GTN Tutorial",
+    description: `Search every Galaxy Training Network tutorial at once, ranked by relevance.
+Prefer this over gtn_search, which can only filter inside a single topic you already know.
+Give the analysis in the user's own words ("identify transmission clusters from bacterial
+SNPs") rather than a keyword. Filters: topic, tool (a Galaxy tool id or part of one),
+server (a Galaxy server URL -- use the one this session is connected to when the user needs
+the tutorial to actually run there), has_workflow. Then read a result with gtn_fetch.
+The first call in a day builds a local index of GTN and takes a few seconds; later calls are
+instant.`,
+    parameters: Type.Object({
+      query: Type.Optional(
+        Type.String({ description: "What the user wants to do, in words. Omit to browse." }),
+      ),
+      topic: Type.Optional(
+        Type.String({ description: "Restrict to a GTN topic, e.g. 'assembly'" }),
+      ),
+      tool: Type.Optional(
+        Type.String({ description: "Only tutorials that use this Galaxy tool id (or a fragment)" }),
+      ),
+      server: Type.Optional(
+        Type.String({ description: "Only tutorials supported on this Galaxy server URL" }),
+      ),
+      has_workflow: Type.Optional(
+        Type.Boolean({ description: "Only tutorials that ship a runnable workflow" }),
+      ),
+      limit: Type.Optional(Type.Number({ description: "Results to return (1-50, default 10)" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const found = gtnFindTutorials(index, params);
+        return {
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
+          details: { count: found.count, returned: found.returned, relaxed: found.relaxed },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error searching GTN: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        { count?: number; returned?: number; relaxed?: boolean; error?: boolean } | undefined;
+      if (d?.error) return new Text("❌ GTN search failed");
+      if (!d?.count) return new Text("🔍 No GTN tutorial matched");
+      return new Text(
+        `📚 ${d.count} GTN tutorial${d.count === 1 ? "" : "s"}` +
+          (d.relaxed ? " (loose match)" : ""),
+      );
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: Find a workflow attached to a GTN tutorial
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_find_workflow",
+    label: "Find GTN Workflow",
+    description: `Search the workflows that GTN tutorials ship. These are teaching workflows:
+each comes with the tutorial that explains it, which makes them the right answer when the user
+is learning an analysis or wants to see how one is put together. They are NOT a replacement for
+the IWC registry -- for a production workflow to run on real data, search IWC first and use this
+when IWC has nothing, or when the user wants the accompanying tutorial. Returns ga_url (the
+workflow file, importable into Galaxy) and trs_endpoint (the same descriptor over GA4GH TRS).
+tests_only limits results to workflows GTN covers with automated tests.`,
+    parameters: Type.Object({
+      query: Type.Optional(
+        Type.String({ description: "The analysis the workflow should perform, in words" }),
+      ),
+      topic: Type.Optional(
+        Type.String({ description: "Restrict to a GTN topic, e.g. 'assembly'" }),
+      ),
+      tool: Type.Optional(
+        Type.String({ description: "Only workflows whose tutorial uses this Galaxy tool id" }),
+      ),
+      server: Type.Optional(
+        Type.String({ description: "Only workflows supported on this Galaxy server URL" }),
+      ),
+      tests_only: Type.Optional(Type.Boolean({ description: "Only workflows GTN tests in CI" })),
+      limit: Type.Optional(Type.Number({ description: "Results to return (1-50, default 10)" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const found = gtnFindWorkflows(index, params);
+        return {
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
+          details: { count: found.count, returned: found.returned, relaxed: found.relaxed },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error searching GTN workflows: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        { count?: number; relaxed?: boolean; error?: boolean } | undefined;
+      if (d?.error) return new Text("❌ GTN workflow search failed");
+      if (!d?.count) return new Text("🔍 No GTN workflow matched");
+      return new Text(
+        `🧬 ${d.count} GTN workflow${d.count === 1 ? "" : "s"}` +
+          (d.relaxed ? " (loose match)" : ""),
+      );
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: Read one GTN workflow
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_get_workflow",
+    label: "Read GTN Workflow",
+    description: `Read a GTN workflow: what goes in, which tools run in what order, what comes
+out. Identify it with the wfid and name from a gtn_find_workflow result, or with its ga_url.
+Returns a summary rather than the raw file, because a .ga is mostly serialised tool state and
+canvas positions; pass full=true only if you genuinely need the document itself. Use this to
+follow a published analysis step by step, or to see which tools and versions it pins before
+running them yourself. Galaxy cannot import a GTN workflow directly -- give the user ga_url to
+import by hand if that is what they want.`,
+    parameters: Type.Object({
+      wfid: Type.Optional(
+        Type.String({
+          description: "Workflow id from gtn_find_workflow, e.g. 'assembly-chloroplast'",
+        }),
+      ),
+      name: Type.Optional(Type.String({ description: "Workflow name from gtn_find_workflow" })),
+      url: Type.Optional(Type.String({ description: "The ga_url from gtn_find_workflow" })),
+      full: Type.Optional(
+        Type.Boolean({ description: "Return the whole .ga document instead of a summary" }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const result = await gtnGetWorkflow(index, params, {
+          fetchJson: async (url) => {
+            const resp = await fetch(url, { signal });
+            if (!resp.ok) throw new Error(`failed to fetch workflow (HTTP ${resp.status})`);
+            return resp.json();
+          },
+          // The url came out of the index, but a cache file on disk is not a trusted input.
+          checkUrl: gtnUrl,
+        });
+
+        if (result.ok) {
+          return {
+            content: [{ type: "text", text: JSON.stringify(result.workflow, null, 2) }],
+            details: { wfid: params.wfid ?? null, steps: result.steps, full: params.full === true },
+          };
+        }
+        if (result.reason === "ambiguous") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ambiguous: true,
+                    count: result.choices.length,
+                    choices: result.choices,
+                    hint: "Call again with both wfid and name.",
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            details: { ambiguous: result.choices.length },
+          };
+        }
+        const why =
+          result.reason === "no-ref"
+            ? "give wfid, name or url. Find them with gtn_find_workflow."
+            : result.reason === "not-found"
+              ? "no GTN workflow matches that. Find one with gtn_find_workflow first — do not construct ids or URLs."
+              : result.reason === "bad-url"
+                ? result.problem
+                : "that URL did not return a Galaxy workflow";
+        return {
+          content: [{ type: "text", text: `Error: ${why}` }],
+          details: { error: true },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error reading GTN workflow: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        { wfid?: string; steps?: number; ambiguous?: number; error?: boolean } | undefined;
+      if (d?.error) return new Text("❌ GTN workflow read failed");
+      if (d?.ambiguous) return new Text(`❓ ${d.ambiguous} GTN workflows match — narrow it`);
+      return new Text(`🧬 ${d?.wfid ?? "workflow"} (${d?.steps ?? 0} steps)`);
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: Which GTN tutorials use a given Galaxy tool
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_tutorials_for_tool",
+    label: "GTN Tutorials for Tool",
+    description: `Find the GTN tutorials that use a given Galaxy tool. Accepts a full versioned
+tool id (as it appears in a workflow step or an error), an unversioned one, or a bare name like
+'fastqc'; an ambiguous name comes back as a list of candidates to choose from. Reach for this
+when a tool fails, or when its parameters are unclear and you want to see a worked use of it
+before guessing. Answers from the local GTN index, so it costs nothing after the first search.`,
+    parameters: Type.Object({
+      tool: Type.String({
+        description: "Galaxy tool id, or part of one, e.g. 'iuc/multiqc/multiqc'",
+      }),
+      limit: Type.Optional(Type.Number({ description: "Tutorials to return (1-50, default 20)" })),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const found = gtnTutorialsForTool(index, params);
+        return {
+          content: [{ type: "text", text: JSON.stringify(found, null, 2) }],
+          details: { count: found.count, candidates: found.candidates?.length ?? 0 },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        { count?: number; candidates?: number; error?: boolean } | undefined;
+      if (d?.error) return new Text("❌ GTN tool lookup failed");
+      if (!d?.count) {
+        return new Text(
+          d?.candidates
+            ? `❓ ${d.candidates} tools match that name`
+            : "🔍 No tutorial uses that tool",
+        );
+      }
+      return new Text(`📚 ${d.count} tutorial${d.count === 1 ? "" : "s"} use this tool`);
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: Which public Galaxy servers install a given tool
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_servers_for_tool",
+    label: "Servers for Tool",
+    description: `Find which public Galaxy servers install a given tool, from GTN's public server
+tool listing. Results are per tool version, because a server having the tool is not the same as
+having the version a workflow pins; any_version lists the servers that have it at all. Use this
+when a tool is missing on the server this session is connected to, or to check before sending a
+user to a server that cannot run their analysis. Covers the public usegalaxy.* servers only — it
+says nothing about a private or institutional Galaxy.`,
+    parameters: Type.Object({
+      tool: Type.String({
+        description: "Galaxy tool id, or part of one, e.g. 'devteam/fastqc/fastqc'",
+      }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const result = await gtnServersForTool(index, params.tool, {
+          fetchJson: async (url) => {
+            const resp = await fetch(url, { signal });
+            // A 404 is an answer here: the tool is simply not in the public listing.
+            if (resp.status === 404) return undefined;
+            if (!resp.ok) throw new Error(`GTN returned HTTP ${resp.status}`);
+            return resp.json();
+          },
+        });
+
+        if (result.ok) {
+          const body = {
+            tool: result.tool,
+            versions: result.versions,
+            any_version: result.any_version,
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(body, null, 2) }],
+            details: { servers: result.any_version.length, versions: result.versions.length },
+          };
+        }
+        if (result.reason === "unresolved") {
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    tool: params.tool,
+                    candidates: result.candidates,
+                    hint: result.candidates.length
+                      ? "That name matches several tools. Call again with one of `candidates`."
+                      : "No tool in GTN matches that name.",
+                  },
+                  null,
+                  2,
+                ),
+              },
+            ],
+            details: { candidates: result.candidates.length },
+          };
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text:
+                result.reason === "built-in"
+                  ? `"${result.tool}" is a built-in Galaxy tool, so it is on every server and not in the public listing.`
+                  : `No public server listing for "${result.tool}".`,
+            },
+          ],
+          details: { missing: true },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        | {
+            servers?: number;
+            versions?: number;
+            candidates?: number;
+            missing?: boolean;
+            error?: boolean;
+          }
+        | undefined;
+      if (d?.error) return new Text("❌ Server lookup failed");
+      if (d?.missing) return new Text("🔍 Not in the public server listing");
+      if (d?.candidates) return new Text(`❓ ${d.candidates} tools match that name`);
+      return new Text(`🌐 On ${d?.servers ?? 0} public server${d?.servers === 1 ? "" : "s"}`);
+    },
+  });
+
+  // ─────────────────────────────────────────────────────────────────────────────
+  // Tool: The ordered chain of tutorials that leads to a given tutorial
+  // ─────────────────────────────────────────────────────────────────────────────
+  pi.registerTool({
+    name: "gtn_learning_path",
+    label: "GTN Learning Path",
+    description: `Resolve where someone should actually start, for a tutorial they want to reach.
+GTN tutorials declare prerequisites, and a search ranks by relevance, so the best match for a
+question is routinely the middle of a chain: "identify transmission clusters" matches the
+transmission tutorial, which assumes two earlier tutorials the user has not been told about.
+Those prerequisites are curated by the people who teach the material and cannot be inferred
+from the tutorial text -- call this whenever a user asks where to begin, says they are new to
+a subject, or you are about to recommend a tutorial as a starting point.
+Pass id ("<topic>/<tutorial>", as gtn_find_tutorial returns it), or topic + tutorial, or a
+query to resolve by search. Returns start_here (the entry point), the ordered path, total
+time, the tutorial's own key points as caveats, and what it assumes but does not teach.
+Name the tools listed by the tutorials in the path rather than equivalents you know of --
+the GTN's phylogeny material uses RAxML, not IQ-TREE or FastTree.`,
+    parameters: Type.Object({
+      id: Type.Optional(
+        Type.String({ description: "Material id, e.g. 'evolution/mtb_transmission'" }),
+      ),
+      topic: Type.Optional(Type.String({ description: "Topic id, with `tutorial`" })),
+      tutorial: Type.Optional(Type.String({ description: "Tutorial name, with `topic`" })),
+      query: Type.Optional(
+        Type.String({ description: "Resolve the goal tutorial by search instead of by id" }),
+      ),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, _ctx) {
+      try {
+        const index = await loadGtnIndex({ cacheFile: gtnIndexFile(), signal });
+        const result = gtnLearningPath(index, params);
+        return {
+          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
+          details:
+            result.status === "ok"
+              ? {
+                  steps: result.path.length,
+                  prerequisites: result.prerequisite_count,
+                  total_time: result.total_time ?? undefined,
+                }
+              : { missing: true },
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Error resolving GTN learning path: ${msg}` }],
+          details: { error: true },
+        };
+      }
+    },
+    renderResult: (result) => {
+      const d = result.details as
+        | {
+            steps?: number;
+            prerequisites?: number;
+            total_time?: string;
+            missing?: boolean;
+            error?: boolean;
+          }
+        | undefined;
+      if (d?.error) return new Text("❌ Learning path lookup failed");
+      if (d?.missing) return new Text("🔍 No such GTN tutorial");
+      if (!d?.prerequisites) return new Text("🎯 Already an entry point — no prerequisites");
+      return new Text(
+        `🪜 ${d.prerequisites} prerequisite${d.prerequisites === 1 ? "" : "s"}` +
+          ` (${d.steps} steps${d.total_time ? `, ${d.total_time}` : ""})`,
+      );
     },
   });
 
