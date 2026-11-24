@@ -200,6 +200,10 @@ async function fetchMode(): Promise<"remote" | "desktop"> {
   getAgentStatus: () => Promise.resolve({ status: "stopped", turnActive: false }),
   notebookStatus: () => Promise.resolve({ exists: false, hasContent: false }),
   clearNotebookArtifacts: () => Promise.resolve({ cleared: false }),
+  // No session replay here yet, so a reload starts with an empty chat. What's
+  // Happening rebuilds from the same replay (restore() in
+  // app/src/renderer/whats-happening-orbit.ts), so when this sends
+  // agent:session-history, its narration comes back too.
   replayChat: () =>
     Promise.resolve({ ok: false, error: "session restore is unavailable in remote mode" }),
   listAllModels: () =>

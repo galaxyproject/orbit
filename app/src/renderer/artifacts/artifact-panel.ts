@@ -60,6 +60,10 @@ const NOTEBOOK_EMPTY_HTML = `
 
 type TabKey = "notebook" | "activity" | "dashboard" | "file";
 
+/** What the Activity tab's top section shows. */
+type ActivityView = "whats-happening" | "shell";
+const ACTIVITY_VIEW_KEY = "orbit.activityView";
+
 export class ArtifactPanel {
   private notebookEl: HTMLElement;
   private activityEl: HTMLElement;
@@ -95,6 +99,20 @@ export class ArtifactPanel {
       });
     }
 
+    // The Activity tab's top section: "What's happening | Shell".
+    for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-activity-view]")) {
+      btn.addEventListener("click", () => {
+        this.selectActivityView(btn.dataset.activityView as ActivityView);
+      });
+    }
+    let remembered: string | null = null;
+    try {
+      remembered = localStorage.getItem(ACTIVITY_VIEW_KEY);
+    } catch {
+      // Storage unavailable: the default stands.
+    }
+    if (remembered === "shell") this.selectActivityView("shell", false);
+
     const fileTabClose = document.getElementById("file-tab-close");
     fileTabClose?.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -106,6 +124,29 @@ export class ArtifactPanel {
   /** Returns the Dashboard tab container so the dashboard host can mount its DOM. */
   getDashboardContainer(): HTMLElement {
     return this.dashboardEl;
+  }
+
+  /** Returns the Activity tab's What's Happening container so the narration view can mount its DOM. */
+  getWhatsHappeningContainer(): HTMLElement {
+    return document.getElementById("whats-happening-view")!;
+  }
+
+  /** Shows What's Happening or the shell in the Activity tab's top section, remembering the choice. */
+  selectActivityView(view: ActivityView, remember = true): void {
+    for (const btn of document.querySelectorAll<HTMLButtonElement>("[data-activity-view]")) {
+      btn.classList.toggle("active", btn.dataset.activityView === view);
+    }
+    document
+      .getElementById("whats-happening-view")
+      ?.classList.toggle("hidden", view !== "whats-happening");
+    document.getElementById("agent-shell-body")?.classList.toggle("hidden", view !== "shell");
+    document.getElementById("agent-shell-clear")?.classList.toggle("hidden", view !== "shell");
+    if (!remember) return;
+    try {
+      localStorage.setItem(ACTIVITY_VIEW_KEY, view);
+    } catch {
+      // Storage unavailable: the choice lasts until the window reloads.
+    }
   }
 
   /** Returns the File tab container so the FileViewer can mount its DOM. */
