@@ -475,4 +475,294 @@ describe("TurnWatchdog", () => {
 
     expect(onTimeout).toHaveBeenCalledTimes(1);
   });
+
+  describe("slash commands (#674)", () => {
+    const COMMAND = TIMEOUT * 10;
+    function makeWithCommands(compactionTimeoutMs?: number) {
+      const onTimeout = vi.fn();
+      const watchdog = new TurnWatchdog({
+        timeoutMs: TIMEOUT,
+        commandTimeoutMs: COMMAND,
+        compactionTimeoutMs,
+        onTimeout,
+      });
+      return { watchdog, onTimeout };
+    }
+    const approve = { id: "cmd_9", label: "/approve" };
+
+    it("keeps the turn limit off a command's handler until pi answers", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      // Handled: AgentManager stands the turn down after settling it.
+      watchdog.commandSettled("cmd_9");
+      watchdog.stop();
+      vi.advanceTimersByTime(COMMAND * 2);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("gives a command sent after a finished turn the command limit", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.observe("agent_end");
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(TIMEOUT * 5);
+
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("puts a slash prompt that starts a turn back on the turn limit", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent({ id: "cmd_1", label: "/data/reads.fq" });
+      vi.advanceTimersByTime(TIMEOUT * 2);
+      // "started", and then pi wedges before agent_start.
+      watchdog.commandSettled("cmd_1");
+      vi.advanceTimersByTime(TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+
+    it("gives up on a command at its own limit, counted from dispatch, naming it", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND / 2);
+      // Fire-and-forget UI and stray events don't push the ceiling back.
+      watchdog.observe("extension_ui_request", "setStatus");
+      watchdog.observe("message_end");
+      vi.advanceTimersByTime(COMMAND / 2 - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+
+      expect(onTimeout).toHaveBeenCalledWith("command", "/approve");
+      // Disarmed for good: the late answer changes nothing.
+      watchdog.commandSettled("cmd_9");
+      vi.advanceTimersByTime(COMMAND * 2);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it("waits on a command's dialog, then starts the command's clock over", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND - 2);
+      watchdog.observe("extension_ui_request", "confirm");
+      vi.advanceTimersByTime(COMMAND * 5);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      // /approve writes the notebook after the answer, with no events.
+      watchdog.dialogAnswered();
+      vi.advanceTimersByTime(COMMAND - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledWith("command", "/approve");
+    });
+
+    it("doesn't count system sleep against a command", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND - 1);
+      watchdog.suspend();
+      vi.advanceTimersByTime(COMMAND * 5);
+      watchdog.resume();
+      vi.advanceTimersByTime(COMMAND - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it("doesn't let a reply to another request lift a tool's pause", () => {
+      const { watchdog, onTimeout } = make();
+      watchdog.promptSent();
+      watchdog.observe("tool_execution_start");
+      watchdog.observe("response");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("keeps timing a running turn while a command typed into it runs", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent({ id: "cmd_2", label: "/reconcile" });
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+
+    it("times a command that outlives the turn it was typed into", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent({ id: "cmd_2", label: "/sync" });
+      watchdog.observe("agent_end");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(COMMAND);
+      expect(onTimeout).toHaveBeenCalledWith("command", "/sync");
+    });
+
+    it("watches the turn a command starts once pi has answered it", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      watchdog.observe("extension_ui_request", "confirm");
+      watchdog.dialogAnswered();
+      // /approve queues the approved run and returns; pi answers "handled"
+      // before that run reaches agent_start.
+      watchdog.commandSettled("cmd_9");
+      watchdog.stop();
+      watchdog.observe("agent_start");
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+
+    it("watches only the first run after a command, not every unprompted one", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      watchdog.commandSettled("cmd_9");
+      watchdog.stop();
+      watchdog.observe("agent_start");
+      watchdog.observe("agent_end");
+      // A later run nobody prompted, like a poller's auto-resume.
+      watchdog.observe("agent_start");
+      vi.advanceTimersByTime(TIMEOUT * 5);
+
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("times a run that starts behind a command outliving its turn as a turn", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent({ id: "cmd_2", label: "/sync" });
+      watchdog.observe("agent_end");
+      // pi retries the failed attempt with a fresh run.
+      watchdog.observe("agent_start");
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+
+    it("waits on the dialog of a command that outlived its turn", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent({ id: "cmd_2", label: "/sync" });
+      watchdog.observe("agent_end");
+      vi.advanceTimersByTime(COMMAND - 2);
+      watchdog.observe("extension_ui_request", "confirm");
+      vi.advanceTimersByTime(COMMAND * 5);
+
+      expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    it("names the command that has run longest when two overlap", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND / 2);
+      watchdog.promptSent({ id: "cmd_10", label: "/sync" });
+      vi.advanceTimersByTime(COMMAND / 2);
+
+      expect(onTimeout).toHaveBeenCalledWith("command", "/approve");
+    });
+
+    it("times the later of two commands from its own dispatch once the first settles", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND / 4);
+      watchdog.promptSent({ id: "cmd_10", label: "/sync" });
+      vi.advanceTimersByTime(COMMAND / 2);
+      watchdog.commandSettled("cmd_9");
+      watchdog.stop();
+      vi.advanceTimersByTime(COMMAND / 2 - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+
+      expect(onTimeout).toHaveBeenCalledWith("command", "/sync");
+    });
+
+    it("gives up on only the command that ran out", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(COMMAND / 2);
+      watchdog.promptSent({ id: "cmd_10", label: "/sync" });
+      vi.advanceTimersByTime(COMMAND / 2);
+      expect(onTimeout).toHaveBeenLastCalledWith("command", "/approve");
+
+      vi.advanceTimersByTime(COMMAND / 2 - 1);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenLastCalledWith("command", "/sync");
+    });
+
+    it("keeps timing a command after the turn it was typed into stalls", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(TIMEOUT);
+      expect(onTimeout).toHaveBeenLastCalledWith("turn");
+
+      // The abort stopped the turn, not /approve's handler.
+      vi.advanceTimersByTime(COMMAND - TIMEOUT - 1);
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(1);
+      expect(onTimeout).toHaveBeenLastCalledWith("command", "/approve");
+    });
+
+    it("watches the run a command queues after the turn it was typed into stalled", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent();
+      watchdog.observe("agent_start");
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(TIMEOUT);
+      watchdog.observe("agent_end");
+      watchdog.commandSettled("cmd_9");
+      watchdog.stop();
+      watchdog.observe("agent_start");
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledTimes(2);
+      expect(onTimeout).toHaveBeenLastCalledWith("turn");
+    });
+
+    it("keeps a plain prompt on the turn limit while a command is running", () => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(TIMEOUT * 3);
+      watchdog.promptSent();
+      vi.advanceTimersByTime(TIMEOUT - 1);
+      expect(onTimeout).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+
+    it("doesn't let a command postpone a compaction's ceiling", () => {
+      const { watchdog, onTimeout } = makeWithCommands(TIMEOUT * 20);
+      watchdog.observe("compaction_start");
+      vi.advanceTimersByTime(TIMEOUT * 19);
+      watchdog.promptSent(approve);
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledWith("compaction");
+    });
+
+    it.each(["brainExited", "reset"] as const)("forgets in-flight commands on %s", (method) => {
+      const { watchdog, onTimeout } = makeWithCommands();
+      watchdog.promptSent(approve);
+      watchdog[method]();
+      watchdog.promptSent();
+      vi.advanceTimersByTime(TIMEOUT);
+
+      expect(onTimeout).toHaveBeenCalledWith("turn");
+    });
+  });
 });
